@@ -1,0 +1,5 @@
+﻿__pycache__
+.env
+helper_services/ai_service/models
+helper_services/ai_service/chroma_db
+helper_services/db_loader/data

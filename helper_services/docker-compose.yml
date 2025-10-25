@@ -1,0 +1,38 @@
+services:
+  # Контейнер с rag-моделью
+  ai_service:
+    build: ./ai_service
+    container_name: ai_service
+    restart: unless-stopped
+    volumes:
+    # Путь к векторной базе данных, мы переместим папку из корня в папку приложения
+      - ./ai_service/chroma_db:/app/services/embeddings_service/chroma_db
+    # Путь к предварительно загруженым моделям, можно грузить в рантайме, но это длительная операция
+      - ./ai_service/models:/app/services/embeddings_service/models
+    env_file:
+      - ./ai_service/.env
+    networks:
+      - internal
+    ports:
+      - "8005:8005"
+    # mem_limit: 160m
+    # cpus: "0.2"
+
+  # Контейнер с ботом
+  tg_bot_service: 
+    build: ./tg_bot_service
+    container_name: tg_bot_service
+    restart: unless-stopped
+    env_file:
+      - ./tg_bot_service/.env
+    networks:
+      - internal
+    mem_limit: 128m
+    cpus: "0.2"
+    command: python main.py
+
+networks:
+  internal:
+    name: internal
+    driver: bridge
+

@@ -1,0 +1,15 @@
+chromadb
+sentence-transformers
+numpy
+python-dotenv
+fastapi
+uvicorn[standard]
+groq
+sentry-sdk
+python-multipart
+
+# фиксируем torch только с CPU-билдом
+torch==2.3.1+cpu
+torchvision==0.18.1+cpu
+torchaudio==2.3.1+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
