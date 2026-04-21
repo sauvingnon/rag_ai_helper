@@ -4,7 +4,7 @@ from app.api.endpoints import message_chat
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
 from app.logger import logger
-from config import SENTRY_KEY
+from app.config import SENTRY_KEY
 
 # Логи в Sentry
 sentry_logging = LoggingIntegration(

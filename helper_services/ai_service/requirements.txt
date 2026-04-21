@@ -1,5 +1,14 @@
+# фиксируем torch только с CPU-билдом
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.3.1+cpu
+torchvision==0.18.1+cpu
+torchaudio==2.3.1+cpu
+
+# остальные зависимости
 chromadb
 sentence-transformers
+transformers<4.47.0
 numpy
 python-dotenv
 fastapi
@@ -7,9 +16,3 @@ uvicorn[standard]
 groq
 sentry-sdk
 python-multipart
-
-# фиксируем torch только с CPU-билдом
-torch==2.3.1+cpu
-torchvision==0.18.1+cpu
-torchaudio==2.3.1+cpu
---extra-index-url https://download.pytorch.org/whl/cpu

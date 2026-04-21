@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Голосовой ассистент</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f1117;
+      color: #e8eaed;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 32px;
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 500;
+      color: #9aa0a6;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    #btn {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      border: none;
+      background: #1e88e5;
+      color: white;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+      box-shadow: 0 0 0 0 rgba(30, 136, 229, 0.4);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #btn:hover { background: #1565c0; }
+
+    #btn.recording {
+      background: #e53935;
+      transform: scale(1.08);
+      box-shadow: 0 0 0 14px rgba(229, 57, 53, 0.25);
+      animation: pulse 1.2s infinite;
+    }
+
+    #btn.processing {
+      background: #616161;
+      cursor: not-allowed;
+    }
+
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0   rgba(229, 57, 53, 0.35); }
+      70%  { box-shadow: 0 0 0 18px rgba(229, 57, 53, 0);    }
+      100% { box-shadow: 0 0 0 0   rgba(229, 57, 53, 0);     }
+    }
+
+    #status {
+      font-size: 0.9rem;
+      color: #9aa0a6;
+      height: 20px;
+    }
+
+    #chat {
+      width: 100%;
+      max-width: 640px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .bubble {
+      padding: 12px 16px;
+      border-radius: 12px;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      max-width: 90%;
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; } }
+
+    .bubble.user {
+      background: #1e3a5f;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+
+    .bubble.assistant {
+      background: #1e2535;
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+
+    .bubble .label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      opacity: 0.55;
+    }
+
+    #error {
+      color: #ef5350;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Голосовой ассистент</h1>
+
+  <button id="btn">Держать<br>и говорить</button>
+
+  <div id="status">Подключение...</div>
+  <div id="error"></div>
+
+  <div id="chat"></div>
+
+  <script>
+    const btn = document.getElementById('btn');
+    const statusEl = document.getElementById('status');
+    const errorEl = document.getElementById('error');
+    const chat = document.getElementById('chat');
+
+    let ws, mediaRecorder, chunks = [];
+    let pendingMeta = null;
+
+    function setStatus(text) { statusEl.textContent = text; }
+    function setError(text)  { errorEl.textContent = text; }
+
+    function addBubble(role, label, text) {
+      const wrap = document.createElement('div');
+      wrap.className = `bubble ${role}`;
+      wrap.innerHTML = `<div class="label">${label}</div><div>${text}</div>`;
+      chat.appendChild(wrap);
+      wrap.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function connectWS() {
+      ws = new WebSocket(`ws://${location.host}/ws`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen  = () => setStatus('Готов — держи кнопку и говори');
+      ws.onclose = () => { setStatus('Соединение потеряно, переподключение...'); setTimeout(connectWS, 2000); };
+      ws.onerror = () => setError('Ошибка WebSocket');
+
+      ws.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          const data = JSON.parse(event.data);
+          if (data.error) { setError('Ошибка: ' + data.error); setStatus('Готов'); return; }
+          pendingMeta = data;
+          if (data.user_msg) addBubble('user',      'Вы',        data.user_msg);
+          if (data.response) addBubble('assistant', 'Ассистент', data.response);
+          setStatus('Воспроизвожу...');
+        } else {
+          // Binary = WAV audio
+          const blob = new Blob([event.data], { type: 'audio/wav' });
+          const url  = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.onended = () => { URL.revokeObjectURL(url); setStatus('Готов — держи кнопку и говори'); };
+          audio.play().catch(e => { setError('Не удалось воспроизвести: ' + e); setStatus('Готов'); });
+          pendingMeta = null;
+          setError('');
+        }
+      };
+    }
+
+    async function initMic() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+        mediaRecorder.onstop = async () => {
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          chunks = [];
+          if (blob.size < 1000) { setStatus('Слишком коротко, попробуй ещё'); return; }
+          const buf = await blob.arrayBuffer();
+          ws.send(buf);
+          setStatus('Обрабатываю...');
+        };
+      } catch (e) {
+        setError('Нет доступа к микрофону: ' + e.message);
+      }
+    }
+
+    // Push-to-talk: mouse + touch
+    function startRecord() {
+      if (!mediaRecorder || mediaRecorder.state === 'recording') return;
+      if (!ws || ws.readyState !== WebSocket.OPEN) { setError('Нет соединения'); return; }
+      chunks = [];
+      mediaRecorder.start();
+      btn.classList.add('recording');
+      btn.textContent = 'Говори...';
+      setError('');
+    }
+
+    function stopRecord() {
+      if (!mediaRecorder || mediaRecorder.state !== 'recording') return;
+      mediaRecorder.stop();
+      btn.classList.remove('recording');
+      btn.classList.add('processing');
+      btn.innerHTML = 'Держать<br>и говорить';
+      setTimeout(() => btn.classList.remove('processing'), 500);
+    }
+
+    btn.addEventListener('mousedown',  startRecord);
+    btn.addEventListener('mouseup',    stopRecord);
+    btn.addEventListener('mouseleave', stopRecord);
+    btn.addEventListener('touchstart', e => { e.preventDefault(); startRecord(); });
+    btn.addEventListener('touchend',   e => { e.preventDefault(); stopRecord();  });
+
+    connectWS();
+    initMic();
+  </script>
+</body>
+</html>

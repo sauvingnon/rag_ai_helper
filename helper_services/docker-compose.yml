@@ -1,5 +1,13 @@
 services:
-  # Контейнер с rag-моделью
+  asterisk:
+    image: andrius/asterisk:latest   # или mlan/asterisk
+    container_name: asterisk
+    network_mode: host               # важно для RTP!
+    volumes:
+      - ./config:/etc/asterisk
+    restart: unless-stopped
+
+  # Контейнер с rag-моделью НЕ ГОТОВ! УХОДИМ ОТ GROQ и вообще идем на локальный инференс
   ai_service:
     build: ./ai_service
     container_name: ai_service
@@ -18,21 +26,26 @@ services:
     # mem_limit: 160m
     # cpus: "0.2"
 
-  # Контейнер с ботом
-  tg_bot_service: 
-    build: ./tg_bot_service
-    container_name: tg_bot_service
+  voice_service:
+    build: ./voice_service
+    container_name: voice_service
     restart: unless-stopped
-    env_file:
-      - ./tg_bot_service/.env
+    ports:
+      - "8010:8010"
+    volumes:
+      - voice_torch_cache:/app/.torch_cache
+    environment:
+      - AI_SERVICE_URL=http://ai_service:8005
     networks:
       - internal
-    mem_limit: 128m
-    cpus: "0.2"
-    command: python main.py
+    depends_on:
+      - ai_service
 
 networks:
   internal:
     name: internal
     driver: bridge
+
+volumes:
+  voice_torch_cache:
 

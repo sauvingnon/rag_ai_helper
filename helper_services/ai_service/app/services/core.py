@@ -26,7 +26,7 @@ async def voice_handler(file: UploadFile):
 
         clear_msg = prepare_query_for_search(user_msg)
 
-        chunks = search(query=clear_msg)
+        chunks = search(query=clear_msg, top_k=3)
 
         if not chunks:
             response = "Извини, я не могу ответить на этот запрос."
@@ -45,7 +45,7 @@ async def voice_handler(file: UploadFile):
 
         response = await ai_request(promt)
 
-        logger.info(f"Ответ: {response}\nПодготовка голосового ответа")
+        # logger.info(f"Ответ: {response}\nПодготовка голосового ответа")
 
         # audio_response = await get_audio_response(response)
 
