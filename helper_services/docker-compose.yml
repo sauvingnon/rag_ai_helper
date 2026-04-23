@@ -1,11 +1,34 @@
 services:
   asterisk:
-    image: andrius/asterisk:latest   # или mlan/asterisk
+    image: mlan/asterisk:latest
     container_name: asterisk
-    network_mode: host               # важно для RTP!
     volumes:
       - ./config:/etc/asterisk
     restart: unless-stopped
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060"
+      - "10000-10100:10000-10100/udp"
+    networks:
+      - internal
+    depends_on:
+      - telephony_service
+
+  telephony_service:
+    build: ./telephony_service
+    container_name: telephony_service
+    restart: unless-stopped
+    ports:
+      - "9093:9093"                  # AudioSocket — Asterisk (хост) → сюда
+    volumes:
+      - telephony_torch_cache:/app/.torch_cache
+    environment:
+      - AI_SERVICE_URL=http://ai_service:8005
+      - AUDIOSOCKET_PORT=9093
+    networks:
+      - internal
+    depends_on:
+      - ai_service
 
   # Контейнер с rag-моделью НЕ ГОТОВ! УХОДИМ ОТ GROQ и вообще идем на локальный инференс
   ai_service:
@@ -48,4 +71,5 @@ networks:
 
 volumes:
   voice_torch_cache:
+  telephony_torch_cache:
 
