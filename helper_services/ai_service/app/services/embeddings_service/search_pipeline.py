@@ -1,14 +1,10 @@
-from app.config import TOP_K, RERANK_TOP
+from app.config import TOP_K, RERANK_TOP, RERANK_THRESHOLD
 from .db_client import collection
 from .models import cross_encoder
 
-# Поиск top-K через Chroma
-def search(query, top_k=TOP_K):
-    results = collection.query(
-        query_texts=[query],
-        n_results=top_k
-    )
-    # Chroma возвращает dict: {"ids": ..., "documents": ..., "metadatas": ...}
+
+def search(query: str, top_k: int = TOP_K) -> list[dict]:
+    results = collection.query(query_texts=[query], n_results=top_k)
     chunks = []
     for document, meta in zip(results["documents"][0], results["metadatas"][0]):
         chunks.append({
@@ -17,20 +13,19 @@ def search(query, top_k=TOP_K):
             "name": meta.get("name"),
             "text": meta.get("text"),
             "keywords": meta.get("keywords"),
-            "notes": meta.get("notes")
+            "notes": meta.get("notes"),
         })
     return chunks
 
 
-# Реранк через Cross-Encoder
-def rerank(query, chunks, top_rerank=RERANK_TOP):
-    pairs = []
-    for ch in chunks:
-        text = ch.get("document")
-        pairs.append((query, text))
-    
+def rerank(query: str, chunks: list[dict], top_rerank: int = RERANK_TOP) -> list[dict] | None:
+    """Возвращает None если лучший score ниже порога — запрос нерелевантен базе."""
+    pairs = [(query, ch["document"]) for ch in chunks]
     scores = cross_encoder.predict(pairs)
-    scored_chunks = list(zip(scores, chunks))
-    scored_chunks.sort(key=lambda x: x[0], reverse=True)
-    return [ch for _, ch in scored_chunks[:int(top_rerank)]]
+    scored = sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)
 
+    best_score = scored[0][0] if scored else -999
+    if best_score < RERANK_THRESHOLD:
+        return None  # ничего релевантного нет
+
+    return [ch for _, ch in scored[:int(top_rerank)]]

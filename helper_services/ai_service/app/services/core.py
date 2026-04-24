@@ -1,114 +1,68 @@
-from .llm_service.llm_request import ai_request, ai_voice_reqest, get_audio_response
+from .llm_service.llm_request import ai_agent_stream, ai_voice_reqest
 from app.logger import logger
 from app.api.schemas.model_name import AIRequest, AIAudioResponse
-from .embeddings_service.search_pipeline import search, rerank
-from app.utils.preprocess import prepare_query_for_search
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import UploadFile
 import io
 
-async def voice_handler(file: UploadFile):
-    """
-    Принимаем аудио в формате mp3/wav/ogg
-    """
-    try:
 
+async def voice_handler(file: UploadFile, history: list = None, user_name: str = ""):
+    try:
         logger.info("Запущено выполнение запроса на распознавание аудио.")
 
-        # читаем содержимое в память
         audio_bytes = await file.read()
+        bio = io.BytesIO(audio_bytes)
+        bio.name = "voice.wav"
 
-        file = io.BytesIO(audio_bytes)
-        file.name = "voice.wav"
-        
-        user_msg = await ai_voice_reqest(file=file)
+        user_msg = await ai_voice_reqest(file=bio)
 
-        logger.info("Голосовое сообщение успешно обработано.")
+        if not user_msg or not user_msg.strip():
+            logger.info("STT вернул пустой текст — пропускаем")
+            return AIAudioResponse(user_msg="", response="")
 
-        clear_msg = prepare_query_for_search(user_msg)
+        logger.info("Голосовое сообщение: %s", user_msg[:80])
 
-        chunks = search(query=clear_msg, top_k=3)
+        sentences = []
+        async for sentence in ai_agent_stream(user_msg, history=history or [], user_name=user_name):
+            sentences.append(sentence)
 
-        if not chunks:
-            response = "Извини, я не могу ответить на этот запрос."
-            logger.info(f"Ответ не был сформирован, так как chunks нет.")
-            return response
-
-        logger.info(f"Количество полученных чанков: {len(chunks)}")
-
-        top_chunks = rerank(clear_msg, chunks)
-
-        logger.info(f"Реранк отсорировал самые релевантные: {len(top_chunks)}")
-
-        promt = await build_llm_prompt(user_msg, top_chunks)
-
-        logger.info(f"Итоговый промт: {promt}")
-
-        response = await ai_request(promt)
-
-        # logger.info(f"Ответ: {response}\nПодготовка голосового ответа")
-
-        # audio_response = await get_audio_response(response)
-
-        result = AIAudioResponse(user_msg=user_msg, response=response)
-
-        logger.info(f"Запрос на распознавание выполнен")
-
-        return result    
+        response = " ".join(sentences)
+        logger.info("Ответ: %s", response[:120])
+        return AIAudioResponse(user_msg=user_msg, response=response)
 
     except Exception as e:
-        logger.exception(f"Ошибка: {e}")
+        logger.exception("Ошибка voice_handler: %s", e)
 
-# Главный обработчик - связывает эмб модель и ллм модель
+
 async def general_handler(request: AIRequest) -> str:
-
     try:
+        logger.info("Запрос: %s", request.message[:80])
 
-        logger.info(f"Запущено выполнение запроса: {request.message}")
+        sentences = []
+        async for sentence in ai_agent_stream(request.message):
+            sentences.append(sentence)
 
-        clear_message = prepare_query_for_search(request.message)
-
-        chunks = search(query=clear_message)
-
-        if not chunks:
-            response = "Извини, я не могу ответить на этот запрос."
-            logger.info(f"Ответ не был сформирован, так как chunks нет.")
-            return response
-        
-        logger.info(f"Количество полученных чанков: {len(chunks)}")
-
-        top_chunks = rerank(clear_message, chunks)
-
-        logger.info(f"Реранк отсорировал самые релевантные: {len(top_chunks)}")
-
-        promt = await build_llm_prompt(request.message, top_chunks)
-
-        logger.info(f"Итоговый промт: {promt}")
-
-        response = await ai_request(promt)
-
-        logger.info(f"Ответ: {response}")
-
+        response = " ".join(sentences)
+        logger.info("Ответ: %s", response[:120])
         return response
-    
+
     except Exception as e:
-        logger.exception(f"Ошибка в /start: {e}")
-
-async def build_llm_prompt(user_question, chunks):
-    prompt = ""
-    for i, chunk in enumerate(chunks, 1):
-        document = chunk.get("document")
-        notes = chunk.get("notes")
-        type = chunk.get("type")
-        
-        prompt += f"Chunk {i}:\n"
-        prompt += f"Text: {document}\n\n"
-        if notes:
-            prompt += f"Дополнительные данные: {notes}\n\n"
-        
-    prompt += f"Вопрос пользователя: {user_question}\n"
-    prompt += (
-        "Используя только приведённые выше chunks, сформулируй полный и точный ответ без указаний твоего хода размышления, выводов. Ты справочная система."
-    )
-    return prompt
+        logger.exception("Ошибка general_handler: %s", e)
+        return "Извини, произошла ошибка."
 
 
+async def voice_handler_stream(file: UploadFile, history: list = None, user_name: str = ""):
+    """Async-генератор: (user_msg, sentence). Предложения отдаются по мере генерации LLM."""
+    audio_bytes = await file.read()
+    bio = io.BytesIO(audio_bytes)
+    bio.name = "voice.wav"
+
+    user_msg = await ai_voice_reqest(file=bio)
+    if not user_msg or not user_msg.strip():
+        return
+
+    logger.info("STT: %s", user_msg[:80])
+
+    first = True
+    async for sentence in ai_agent_stream(user_msg, history=history or [], user_name=user_name):
+        yield (user_msg if first else ""), sentence
+        first = False

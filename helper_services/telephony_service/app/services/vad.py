@@ -12,8 +12,8 @@ SAMPLE_RATE = 8000
 CHUNK_SAMPLES = 256       # 32ms — обязательный размер чанка для Silero VAD при 8kHz
 CHUNK_BYTES = CHUNK_SAMPLES * 2  # 16-bit
 
-SPEECH_THRESHOLD = 0.50   # выше → говорит
-SILENCE_THRESHOLD = 0.35  # ниже → тишина
+SPEECH_THRESHOLD = 0.65   # выше → говорит (поднято чтобы шум не триггерил)
+SILENCE_THRESHOLD = 0.40  # ниже → тишина
 SILENCE_CHUNKS_TO_END = 24  # ~768ms тишины после речи → конец фразы (24 × 32ms)
 PRE_BUFFER_CHUNKS = 16      # ~512ms буфер до начала речи (16 × 32ms)
 

@@ -1,6 +1,8 @@
 # Входная точка сервиса по перенаправлению запросов на API сторонних моделей.
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.api.endpoints import message_chat
+from app.services.llm_service.llm_request import _get_whisper
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
 from app.logger import logger
@@ -20,12 +22,24 @@ sentry_sdk.init(
     integrations=[sentry_logging]
 )
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Загрузка моделей при старте...")
+    _get_whisper()
+    import app.services.embeddings_service.db_client  # noqa: F401 — загружает SBERT + CrossEncoder + ChromaDB
+    logger.info("Все модели загружены")
+    yield
+
 logger.info("Запуск сервиса")
 
 # Создаем приложение
-app = FastAPI(debug=True)
+app = FastAPI(debug=True, lifespan=lifespan)
 
 # Подключаем роутеры
 app.include_router(message_chat.router)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 logger.info("Сервис запущен")

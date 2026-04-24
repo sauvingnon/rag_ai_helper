@@ -28,7 +28,8 @@ services:
     networks:
       - internal
     depends_on:
-      - ai_service
+      ai_service:
+        condition: service_healthy
 
   # Контейнер с rag-моделью НЕ ГОТОВ! УХОДИМ ОТ GROQ и вообще идем на локальный инференс
   ai_service:
@@ -36,33 +37,40 @@ services:
     container_name: ai_service
     restart: unless-stopped
     volumes:
-    # Путь к векторной базе данных, мы переместим папку из корня в папку приложения
       - ./ai_service/chroma_db:/app/services/embeddings_service/chroma_db
-    # Путь к предварительно загруженым моделям, можно грузить в рантайме, но это длительная операция
       - ./ai_service/models:/app/services/embeddings_service/models
+      - ai_whisper_cache:/app/.whisper_cache
     env_file:
       - ./ai_service/.env
+    environment:
+      - HF_HUB_OFFLINE=1
     networks:
       - internal
     ports:
       - "8005:8005"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     # mem_limit: 160m
     # cpus: "0.2"
 
-  voice_service:
-    build: ./voice_service
-    container_name: voice_service
-    restart: unless-stopped
-    ports:
-      - "8010:8010"
-    volumes:
-      - voice_torch_cache:/app/.torch_cache
-    environment:
-      - AI_SERVICE_URL=http://ai_service:8005
-    networks:
-      - internal
-    depends_on:
-      - ai_service
+  # voice_service:
+  #   build: ./voice_service
+  #   container_name: voice_service
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8010:8010"
+  #   volumes:
+  #     - voice_torch_cache:/app/.torch_cache
+  #   environment:
+  #     - AI_SERVICE_URL=http://ai_service:8005
+  #   networks:
+  #     - internal
+  #   depends_on:
+  #     - ai_service
 
 networks:
   internal:
@@ -72,4 +80,5 @@ networks:
 volumes:
   voice_torch_cache:
   telephony_torch_cache:
+  ai_whisper_cache:
 
