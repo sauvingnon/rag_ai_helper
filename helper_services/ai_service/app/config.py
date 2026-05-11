@@ -12,8 +12,9 @@ CROSS_ENCODER_MODEL_PATH = os.getenv("CROSS_ENCODER_MODEL_PATH")
 TOP_K = int(os.getenv("TOP_K"))
 SENTRY_KEY = os.getenv("SENTRY_KEY")
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-placeholder")
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 RERANK_THRESHOLD = float(os.getenv("RERANK_THRESHOLD", "-2.0"))

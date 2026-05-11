@@ -8,7 +8,7 @@ from typing import AsyncGenerator
 
 from openai import AsyncOpenAI
 from faster_whisper import WhisperModel
-from app.config import OLLAMA_BASE_URL, OLLAMA_MODEL, WHISPER_MODEL
+from app.config import LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, WHISPER_MODEL
 from app.logger import logger
 
 # ─── Агент ───────────────────────────────────────────────────────────────────
@@ -17,34 +17,51 @@ AGENT_SYSTEM = """ВАЖНО: Отвечай ТОЛЬКО на русском я
 
 Ты голосовой ассистент справочной службы университета. Общаешься по телефону.
 
-ПРАВИЛО: Ты не знаешь ничего об этом университете из своей памяти. Любые конкретные факты об университете — факультеты, специальности, расписание, контакты, документы, требования, преподаватели, корпуса, стоимость обучения — ты ОБЯЗАН искать через инструмент search_knowledge_base. Отвечать по памяти на такие вопросы ЗАПРЕЩЕНО.
+У тебя два инструмента:
 
-Вызывай search_knowledge_base при любом вопросе о:
-- факультетах, кафедрах, институтах, направлениях, специальностях
-- приёмной комиссии, документах, вступительных испытаниях, дедлайнах
-- расписании, сессии, экзаменах, зачётах
-- стоимости обучения, общежитии, стипендии
-- контактах, адресах, корпусах, режиме работы
-- преподавателях, деканах, ректорате
+1. search_knowledge_base — ищет информацию в базе знаний. Вызывай при любом конкретном вопросе об университете: факультеты, специальности, приёмная комиссия, расписание, контакты, стоимость обучения, общежитие, преподаватели, корпуса и т.д. Можно вызвать повторно с уточнённым запросом если первый результат недостаточен (максимум 2 раза за ход).
 
-Не вызывай инструмент только если: вопрос неясный (переспроси), тема не касается университета (откажись вежливо), или это приветствие/благодарность.
+2. ask_clarification — задаёт уточняющий вопрос пользователю. Используй ТОЛЬКО если запрос совершенно неразборчив или настолько общий, что невозможно понять что искать (например: "расскажи про всё", "что у вас есть", несвязная речь). Если вопрос хоть как-то понятен — сразу ищи, не уточняй.
 
 ЗАПРЕЩЕНО:
-- упоминать названия инструментов или функций (search_knowledge_base и т.п.)
+- упоминать названия инструментов или функций в ответе пользователю
 - обещать перезвонить, отправить информацию позже, передать заявку
-- говорить что "найдёшь информацию" — либо ищи прямо сейчас через инструмент, либо скажи что не знаешь
-- придумывать информацию об университете из головы
+- придумывать факты об университете из головы
+- говорить "уточню", "проверю", "найду" — либо ищи прямо сейчас, либо скажи что не знаешь
 
-Ты отвечаешь ПРЯМО СЕЙЧАС в реальном времени. Никаких обещаний "позже".
-
-Отвечай кратко, 1-2 предложения. Это телефонный разговор. Язык: русский."""
+Отвечай кратко, 1-2 предложения. Это телефонный разговор. Язык: только русский."""
 
 TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "ask_clarification",
+            "description": (
+                "Задать уточняющий вопрос пользователю. "
+                "Использовать ТОЛЬКО если запрос совершенно непонятен и поиск заведомо не поможет. "
+                "Если запрос хоть как-то понятен — вместо этого вызывать search_knowledge_base."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "Короткий уточняющий вопрос (одно предложение)"
+                    }
+                },
+                "required": ["question"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_knowledge_base",
-            "description": "Поиск информации в базе знаний университета",
+            "description": (
+                "Поиск информации в базе знаний университета. "
+                "Вызывать при любом конкретном вопросе об университете. "
+                "Можно вызвать повторно с уточнённым запросом если первый результат неполный (макс. 2 раза)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -61,7 +78,30 @@ TOOLS = [
 
 _SENT_END = re.compile(r'(?<=[.!?…])\s')
 
-client = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+_FORCE_SEARCH_MARKERS = [
+    "search_knowledge_base",
+    "ask_clarification",
+    "минуточку, ищу",
+    "почти нашла",
+    "перезвон",
+    "позвоню",
+    "свяжусь",
+    "найду информацию",
+    "уточню информацию",
+    "обращусь",
+    "передам",
+    "проверю",
+    "посмотрю",
+    "позвольте я",
+    "дайте мне",
+    "сейчас узнаю",
+    "сейчас проверю",
+    "сейчас посмотрю",
+]
+
+MAX_SEARCHES = 2
+
+client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -80,14 +120,14 @@ async def _stream_sentences(stream) -> AsyncGenerator[str, None]:
             m = _SENT_END.search(buffer)
             if m:
                 sentence = buffer[: m.start() + 1].strip()
-                buffer = buffer[m.end() :]
+                buffer = buffer[m.end():]
                 if sentence:
                     yield sentence
             elif len(buffer) > 200:
                 split = buffer.rfind(" ", 0, 200)
                 if split > 0:
                     yield buffer[:split].strip()
-                    buffer = buffer[split + 1 :]
+                    buffer = buffer[split + 1:]
                 else:
                     break
             else:
@@ -125,8 +165,16 @@ async def ai_agent_stream(
     history: list = None,
     user_name: str = "",
 ) -> AsyncGenerator[str, None]:
-    """Агентский RAG: LLM сама решает когда и что искать. Отдаёт предложениями."""
+    """Agentic RAG loop.
+
+    Итерации:
+      - stream=False для всех decision-вызовов (tool или direct answer)
+      - stream=True только для финального синтеза после поиска
+      - ask_clarification: просто отдаёт вопрос пользователю и завершается
+      - search_knowledge_base: до MAX_SEARCHES раз, затем форсируем финальный стрим
+    """
     t_start = time.monotonic()
+    loop = asyncio.get_event_loop()
 
     system = AGENT_SYSTEM
     if user_name:
@@ -137,117 +185,127 @@ async def ai_agent_stream(
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    try:
-        # Первый вызов: решение (нестриминг — ждём tool_call или прямой ответ)
-        response = await client.chat.completions.create(
-            model=OLLAMA_MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            stream=False,
-        )
-        t_decision = time.monotonic()
-        msg = response.choices[0].message
+    search_count = 0
 
-        if msg.tool_calls:
-            logger.info("[llm-decision] %.2f с → tool_call", t_decision - t_start)
-            yield "Минуточку, ищу информацию."
+    try:
+        while True:
+            response = await client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+                stream=False,
+            )
+            t_call = time.monotonic()
+            msg = response.choices[0].message
+
+            # ── Нет tool_call → финальный ответ ──────────────────────────────
+            if not msg.tool_calls:
+                content = msg.content or ""
+                logger.info("[llm] %.2f с → прямой ответ: «%s»", t_call - t_start, content[:120])
+
+                force_search = (
+                    not content.strip()
+                    or any(m in content.lower() for m in _FORCE_SEARCH_MARKERS)
+                ) and search_count < MAX_SEARCHES
+
+                if force_search:
+                    reason = "пустой ответ" if not content.strip() else "маркер галлюцинации"
+                    logger.warning("[llm] %s — форсируем поиск", reason)
+                    yield "Минуточку, ищу информацию."
+                    t_s = time.monotonic()
+                    result = await loop.run_in_executor(None, _execute_search, user_message)
+                    logger.info("[search] форс %.2f с", time.monotonic() - t_s)
+                    search_count += 1
+                    messages.append({"role": "assistant", "content": ""})
+                    messages.append({
+                        "role": "user",
+                        "content": f"Используй эту информацию для ответа на вопрос:\n{result}\n\nВопрос: {user_message}"
+                    })
+                    continue
+
+                if search_count > 0:
+                    # После поиска: stream=True для минимальной задержки до первого аудио
+                    t_llm = time.monotonic()
+                    stream = await client.chat.completions.create(
+                        model=LLM_MODEL, messages=messages, stream=True
+                    )
+                    first = True
+                    async for sentence in _stream_sentences(stream):
+                        if first:
+                            logger.info("[llm] первый токен %.2f с от старта", time.monotonic() - t_start)
+                            first = False
+                        yield sentence
+                else:
+                    # Прямой ответ без поиска: контент уже есть, делим на предложения
+                    if content:
+                        for sentence in _split_sentences(content):
+                            yield sentence
+                    else:
+                        yield "Извини, не смогла найти информацию по вашему вопросу."
+                break
+
+            # ── Tool call ─────────────────────────────────────────────────────
+            tc = msg.tool_calls[0]
+            logger.info("[llm] %.2f с → %s", t_call - t_start, tc.function.name)
 
             messages.append({
                 "role": "assistant",
                 "content": msg.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in msg.tool_calls
-                ],
+                "tool_calls": [{
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments}
+                }]
             })
 
-            loop = asyncio.get_event_loop()
-            for tc in msg.tool_calls:
-                if tc.function.name == "search_knowledge_base":
-                    try:
-                        query = json.loads(tc.function.arguments).get("query", user_message)
-                    except Exception:
-                        query = user_message
-                    logger.info("[search] запрос: %s", query[:60])
-                    t_s = time.monotonic()
-                    result = await loop.run_in_executor(None, _execute_search, query)
-                    logger.info("[search] итого %.2f с", time.monotonic() - t_s)
+            # ── ask_clarification ─────────────────────────────────────────────
+            if tc.function.name == "ask_clarification":
+                try:
+                    question = json.loads(tc.function.arguments).get("question", "")
+                except Exception:
+                    question = "Уточните, пожалуйста, ваш вопрос."
+                logger.info("[llm] уточнение: «%s»", question[:80])
+                yield question
+                break  # ждём ответа пользователя в следующем туре
+
+            # ── search_knowledge_base ─────────────────────────────────────────
+            if tc.function.name == "search_knowledge_base":
+                if search_count >= MAX_SEARCHES:
+                    # Лимит исчерпан — форсируем финальный стрим без tool_choice
+                    logger.warning("[llm] лимит поисков, форсируем финальный ответ")
                     messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result,
+                        "role": "tool", "tool_call_id": tc.id,
+                        "content": "Лимит поисков исчерпан. Ответь на основе уже найденной информации."
                     })
+                    stream = await client.chat.completions.create(
+                        model=LLM_MODEL, messages=messages, stream=True
+                    )
+                    async for sentence in _stream_sentences(stream):
+                        yield sentence
+                    break
 
-            yield "Почти нашла информацию для вас."
+                try:
+                    query = json.loads(tc.function.arguments).get("query", user_message)
+                except Exception:
+                    query = user_message
 
-            t_llm2 = time.monotonic()
-            stream = await client.chat.completions.create(
-                model=OLLAMA_MODEL,
-                messages=messages,
-                stream=True,
-            )
-            first_token = True
-            async for sentence in _stream_sentences(stream):
-                if first_token:
-                    logger.info("[llm-answer] первый токен за %.2f с от старта / %.2f с от search",
-                                time.monotonic() - t_start, time.monotonic() - t_llm2)
-                    first_token = False
-                yield sentence
+                search_count += 1
+                logger.info("[search] #%d запрос: «%s»", search_count, query[:60])
 
-        else:
-            content = msg.content or ""
-            logger.info("[llm-decision] %.2f с → прямой ответ: «%s»", t_decision - t_start, content[:120])
-            # Пустой ответ или маркеры что модель хотела искать но не смогла — форсируем поиск
-            _FORCE_SEARCH_MARKERS = [
-                "search_knowledge_base",
-                "минуточку, ищу",
-                "почти нашла",
-                "перезвон",
-                "позвоню",
-                "свяжусь",
-                "найду информацию",
-                "уточню информацию",
-                "обращусь",
-                "передам",
-                "проверю",
-                "посмотрю",
-                "позвольте я",
-                "дайте мне",
-                "сейчас узнаю",
-                "сейчас проверю",
-                "сейчас посмотрю",
-            ]
-            force_search = (
-                not content.strip()
-                or any(m in content.lower() for m in _FORCE_SEARCH_MARKERS)
-            )
-            if force_search:
-                reason = "пустой ответ" if not content.strip() else "маркер галлюцинации"
-                logger.warning("[llm-decision] %s — форсируем поиск", reason)
-                yield "Минуточку, ищу информацию."
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, _execute_search, user_message)
-                yield "Почти нашла информацию для вас."
-                messages.append({"role": "assistant", "content": ""})
-                messages.append({"role": "user", "content": f"Используя эту информацию, ответь на вопрос пользователя:\n{result}\n\nВопрос: {user_message}"})
-                stream = await client.chat.completions.create(
-                    model=OLLAMA_MODEL, messages=messages, stream=True,
-                )
-                async for sentence in _stream_sentences(stream):
-                    yield sentence
-            else:
-                for sentence in _split_sentences(content):
-                    yield sentence
+                yield "Минуточку, ищу информацию." if search_count == 1 else "Уточняю детали."
 
-        logger.info("[agent] полный цикл %.2f с", time.monotonic() - t_start)
+                t_s = time.monotonic()
+                result = await loop.run_in_executor(None, _execute_search, query)
+                logger.info("[search] #%d итого %.2f с", search_count, time.monotonic() - t_s)
+
+                messages.append({
+                    "role": "tool", "tool_call_id": tc.id, "content": result
+                })
+                # Продолжаем loop: LLM решает ответить или поискать ещё
+                continue
+
+        logger.info("[agent] цикл завершён %.2f с, поисков: %d", time.monotonic() - t_start, search_count)
 
     except Exception as e:
         logger.exception("Ошибка агента: %s", e)
