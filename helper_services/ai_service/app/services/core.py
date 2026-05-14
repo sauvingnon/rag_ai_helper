@@ -38,7 +38,7 @@ async def general_handler(request: AIRequest) -> str:
         logger.info("Запрос: %s", request.message[:80])
 
         sentences = []
-        async for sentence in ai_agent_stream(request.message):
+        async for sentence in ai_agent_stream(request.message, history=request.history):
             sentences.append(sentence)
 
         response = " ".join(sentences)

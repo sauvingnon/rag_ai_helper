@@ -1,9 +1,20 @@
+import uuid as _uuid
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services.chroma_client import get_collection
 
 router = APIRouter(prefix="/chunks", tags=["chunks"])
+
+
+class ChunkCreate(BaseModel):
+    name: str
+    text: str
+    keywords: str = ""
+    type: str = "general"
+    notes: str = ""
+    source_file_id: str = ""
 
 
 class ChunkUpdate(BaseModel):
@@ -38,6 +49,24 @@ async def chunk_stats():
         if fid:
             counts[fid] = counts.get(fid, 0) + 1
     return counts
+
+
+@router.post("", status_code=201)
+async def create_chunk(body: ChunkCreate):
+    collection = get_collection()
+    chunk_id = str(_uuid.uuid4())
+    meta = {
+        "name": body.name,
+        "text": body.text,
+        "keywords": body.keywords,
+        "type": body.type,
+        "notes": body.notes,
+        "source_file_id": body.source_file_id,
+        "source_filename": "",
+    }
+    doc = _build_doc(meta)
+    collection.add(ids=[chunk_id], documents=[doc], metadatas=[meta])
+    return {"id": chunk_id, "document": doc, **meta}
 
 
 @router.get("")

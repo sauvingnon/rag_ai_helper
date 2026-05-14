@@ -5,6 +5,7 @@ from pydantic import BaseModel
 # Схема запроса
 class AIRequest(BaseModel):
     message: str
+    history: list = []
 
 class AIAudioResponse(BaseModel):
     user_msg: str

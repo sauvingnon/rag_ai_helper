@@ -1,4 +1,5 @@
 import asyncio
+import random
 import tempfile
 import os
 import re
@@ -107,6 +108,23 @@ _FORCE_SEARCH_MARKERS = [
 ]
 
 MAX_SEARCHES = 2
+
+_SEARCH_PHRASES_1 = [
+    "Минуточку, ищу информацию.",
+    "Сейчас посмотрю.",
+    "Одну секунду, проверяю.",
+    "Ищу в базе знаний.",
+    "Сейчас уточню.",
+    "Дайте секунду, ищу.",
+]
+
+_SEARCH_PHRASES_2 = [
+    "Уточняю детали.",
+    "Ищу дополнительную информацию.",
+    "Проверяю ещё раз.",
+    "Немного подожди, уточняю.",
+    "Ищу подробнее.",
+]
 
 client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
 
@@ -219,7 +237,7 @@ async def ai_agent_stream(
                 if force_search:
                     reason = "пустой ответ" if not content.strip() else "маркер галлюцинации"
                     logger.warning("[llm] %s — форсируем поиск", reason)
-                    yield "Минуточку, ищу информацию."
+                    yield random.choice(_SEARCH_PHRASES_1)
                     t_s = time.monotonic()
                     result = await loop.run_in_executor(None, _execute_search, user_message)
                     logger.info("[search] форс %.2f с", time.monotonic() - t_s)
@@ -300,7 +318,7 @@ async def ai_agent_stream(
                 search_count += 1
                 logger.info("[search] #%d запрос: «%s»", search_count, query[:60])
 
-                yield "Минуточку, ищу информацию." if search_count == 1 else "Уточняю детали."
+                yield random.choice(_SEARCH_PHRASES_1 if search_count == 1 else _SEARCH_PHRASES_2)
 
                 t_s = time.monotonic()
                 result = await loop.run_in_executor(None, _execute_search, query)

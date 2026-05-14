@@ -15,9 +15,9 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      gap: 32px;
-      padding: 24px;
+      justify-content: flex-start;
+      gap: 24px;
+      padding: 48px 24px 32px;
     }
 
     h1 {
@@ -114,6 +114,32 @@
       color: #ef5350;
       font-size: 0.85rem;
     }
+
+    .divider {
+      display: flex; align-items: center; gap: 12px;
+      width: 100%; max-width: 640px; color: #5f6368; font-size: 0.78rem;
+    }
+    .divider::before, .divider::after {
+      content: ''; flex: 1; height: 1px; background: #2a2d36;
+    }
+
+    .text-input-row {
+      display: flex; width: 100%; max-width: 640px; gap: 8px;
+    }
+    #textInput {
+      flex: 1; padding: 12px 16px; border-radius: 12px;
+      border: 1px solid #2a2d36; background: #1e2535; color: #e8eaed;
+      font-size: 0.95rem; font-family: inherit; outline: none; transition: border-color 0.15s;
+    }
+    #textInput:focus { border-color: #1e88e5; }
+    #textInput::placeholder { color: #5f6368; }
+    #sendBtn {
+      padding: 12px 18px; border-radius: 12px; border: none;
+      background: #1e88e5; color: white; font-size: 1.1rem;
+      cursor: pointer; transition: background 0.15s; line-height: 1;
+    }
+    #sendBtn:hover:not(:disabled) { background: #1565c0; }
+    #sendBtn:disabled { opacity: 0.4; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -123,6 +149,13 @@
 
   <div id="status">Подключение...</div>
   <div id="error"></div>
+
+  <div class="divider">или напечатайте</div>
+
+  <div class="text-input-row">
+    <input id="textInput" type="text" placeholder="Напишите вопрос…" />
+    <button id="sendBtn" title="Отправить">→</button>
+  </div>
 
   <div id="chat"></div>
 
@@ -134,6 +167,8 @@
 
     let ws, mediaRecorder, chunks = [];
     let pendingMeta = null;
+    let chatHistory = [];  // единая история для голоса и текста
+    const MAX_HISTORY = 40;
 
     function setStatus(text) { statusEl.textContent = text; }
     function setError(text)  { errorEl.textContent = text; }
@@ -142,8 +177,8 @@
       const wrap = document.createElement('div');
       wrap.className = `bubble ${role}`;
       wrap.innerHTML = `<div class="label">${label}</div><div>${text}</div>`;
-      chat.appendChild(wrap);
-      wrap.scrollIntoView({ behavior: 'smooth' });
+      chat.prepend(wrap);
+      wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     function connectWS() {
@@ -161,6 +196,11 @@
           pendingMeta = data;
           if (data.user_msg) addBubble('user',      'Вы',        data.user_msg);
           if (data.response) addBubble('assistant', 'Ассистент', data.response);
+          if (data.user_msg && data.response) {
+            chatHistory.push({ role: 'user',      content: data.user_msg });
+            chatHistory.push({ role: 'assistant', content: data.response });
+            if (chatHistory.length > MAX_HISTORY) chatHistory = chatHistory.slice(-MAX_HISTORY);
+          }
           setStatus('Воспроизвожу...');
         } else {
           // Binary = WAV audio
@@ -185,6 +225,7 @@
           chunks = [];
           if (blob.size < 1000) { setStatus('Слишком коротко, попробуй ещё'); return; }
           const buf = await blob.arrayBuffer();
+          ws.send(JSON.stringify({ history: chatHistory }));
           ws.send(buf);
           setStatus('Обрабатываю...');
         };
@@ -221,6 +262,49 @@
 
     connectWS();
     initMic();
+
+    // ── Text chat ──────────────────────────────────────────────────────────────
+    const textInput = document.getElementById('textInput');
+    const sendBtn   = document.getElementById('sendBtn');
+
+    async function sendText() {
+      const msg = textInput.value.trim();
+      if (!msg || sendBtn.disabled) return;
+      textInput.value = '';
+      textInput.disabled = true;
+      sendBtn.disabled   = true;
+      setError('');
+
+      addBubble('user', 'Вы', msg);
+
+      try {
+        const r = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, history: chatHistory }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data   = await r.json();
+        const answer = data.response || '';
+        if (answer) {
+          addBubble('assistant', 'Ассистент', answer);
+          chatHistory.push({ role: 'user',      content: msg    });
+          chatHistory.push({ role: 'assistant', content: answer });
+          if (chatHistory.length > MAX_HISTORY) chatHistory = chatHistory.slice(-MAX_HISTORY);
+        }
+      } catch (e) {
+        setError('Ошибка: ' + e.message);
+      } finally {
+        textInput.disabled = false;
+        sendBtn.disabled   = false;
+        textInput.focus();
+      }
+    }
+
+    sendBtn.addEventListener('click', sendText);
+    textInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
+    });
   </script>
 </body>
 </html>
