@@ -3,3 +3,4 @@
 helper_services/ai_service/models
 helper_services/ai_service/chroma_db
 helper_services/db_loader/data
+helper_services/admin_service/frontend/node_modules

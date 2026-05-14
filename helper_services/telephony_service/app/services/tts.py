@@ -28,6 +28,21 @@ def load_tts() -> None:
 
 def _clean(text: str) -> str:
     text = re.sub(r"[*_`#>\[\]]", "", text)
+    # телефоны: 8(3412)77-62-62 или 8 (3412) 77-60-55 доб. 1345 → паузы через запятые
+    text = re.sub(
+        r'8\s*\((\d{3,4})\)\s*([\d][\d\-\s]+\d)(?:\s*доб\.?\s*(\d+))?',
+        lambda m: (
+            f"8, {m.group(1)}, {re.sub(r'[-]', ' ', m.group(2)).strip()}"
+            + (f", добавочный {m.group(3)}" if m.group(3) else "")
+        ),
+        text,
+    )
+    # email: pk@istu.ru → пк, собака, исту точка ру
+    text = re.sub(
+        r'([\w.\-]+)@([\w\-]+(?:\.[\w\-]+)+)',
+        lambda m: f"{m.group(1)}, собака, {m.group(2).replace('.', ' точка ')}",
+        text,
+    )
     return re.sub(r"\s+", " ", text).strip()
 
 

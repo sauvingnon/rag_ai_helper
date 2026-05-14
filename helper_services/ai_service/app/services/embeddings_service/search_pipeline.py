@@ -1,10 +1,10 @@
 from app.config import TOP_K, RERANK_TOP, RERANK_THRESHOLD
-from .db_client import collection
+from .db_client import get_collection
 from .models import cross_encoder
 
 
 def search(query: str, top_k: int = TOP_K) -> list[dict]:
-    results = collection.query(query_texts=[query], n_results=top_k)
+    results = get_collection().query(query_texts=[query], n_results=top_k)
     chunks = []
     for document, meta in zip(results["documents"][0], results["metadatas"][0]):
         chunks.append({

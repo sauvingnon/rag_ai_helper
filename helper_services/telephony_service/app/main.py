@@ -17,16 +17,16 @@ import logging
 import os
 import re
 import struct
+import uuid
 import wave
 from collections import deque
-
-import re
 
 import httpx
 from num2words import num2words
 
 from app.services.vad import SpeechCollector, load_vad, _vad_prob, CHUNK_BYTES
 from app.services.tts import load_tts, synthesize_8k
+from app.services.session_store import load_session, save_session
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -34,8 +34,9 @@ logger = logging.getLogger(__name__)
 AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://ai_service:8005")
 AUDIOSOCKET_PORT = int(os.getenv("AUDIOSOCKET_PORT", 9093))
 
-GREETING = "Здравствуйте! Вы позвонили в справочную службу Ижевского Государственного технического Университета имени Михаила Тимофеевича Калашникова. Как я могу к вам обращаться?"
-MAX_HISTORY = 10
+GREETING_NEW      = "Здравствуйте! Вы позвонили в справочную службу Ижевского Государственного технического Университета имени Михаила Тимофеевича Калашникова. Как я могу к вам обращаться?"
+GREETING_RETURN   = "Здравствуйте, {name}! Рада вас слышать снова. Чем могу помочь?"
+MAX_USER_TURNS    = 20  # реплик пользователя в истории (каждая = 2 сообщения)
 
 STOP_WORDS = {"стоп", "хватит", "прекрати", "остановись", "замолчи", "подожди", "тихо"}
 _ECHO_WINDOW = 0.35   # секунд — игнорируем эхо после начала воспроизведения
@@ -61,10 +62,27 @@ def extract_name(text: str) -> str:
 
 
 class CallSession:
-    def __init__(self):
+    def __init__(self, session_id: str = ""):
+        self.session_id = session_id
         self.name: str = ""
         self.name_received: bool = False
-        self._history: deque = deque(maxlen=MAX_HISTORY)
+        self._history: deque = deque(maxlen=MAX_USER_TURNS * 2)
+
+    def load(self) -> None:
+        if not self.session_id:
+            return
+        data = load_session(self.session_id)
+        self.name = data["name"]
+        self.name_received = data["name_received"]
+        for msg in data["history"]:
+            self._history.append(msg)
+        if self.name:
+            logger.info("Сессия %s восстановлена: имя=%s, история=%d сообщ.",
+                        self.session_id, self.name, len(self._history))
+
+    def save(self) -> None:
+        if self.session_id:
+            save_session(self.session_id, self.name, self.name_received, list(self._history))
 
     @property
     def history(self) -> list:
@@ -73,6 +91,7 @@ class CallSession:
     def add_turn(self, user_msg: str, assistant_msg: str) -> None:
         self._history.append({"role": "user", "content": user_msg})
         self._history.append({"role": "assistant", "content": assistant_msg})
+        self.save()
 
 T_HANGUP, T_UUID, T_AUDIO, T_ERROR = 0x00, 0x01, 0x10, 0xff
 
@@ -354,7 +373,7 @@ async def handle_call(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     logger.info("Call connected from %s", addr)
     collector = SpeechCollector()
     session = CallSession()
-    mute_until: float = 0.0  # глушим VAD после окончания воспроизведения
+    mute_until: float = 0.0
 
     async def drain_echo() -> None:
         nonlocal mute_until
@@ -381,8 +400,15 @@ async def handle_call(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             msg_type, payload = await read_msg(reader)
 
             if msg_type == T_UUID:
-                logger.info("Call UUID: %s", payload.hex())
-                await play(synthesize_8k(GREETING))
+                call_uuid = str(uuid.UUID(bytes=payload))
+                logger.info("Call UUID: %s", call_uuid)
+                session.session_id = call_uuid
+                session.load()
+                if session.name_received:
+                    greeting = GREETING_RETURN.format(name=session.name)
+                else:
+                    greeting = GREETING_NEW
+                await play(synthesize_8k(greeting))
 
             elif msg_type == T_AUDIO:
                 if asyncio.get_event_loop().time() < mute_until:

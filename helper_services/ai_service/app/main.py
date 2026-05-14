@@ -42,4 +42,11 @@ app.include_router(message_chat.router)
 async def health():
     return {"status": "ok"}
 
+
+@app.post("/reload-db")
+async def reload_db():
+    from app.services.embeddings_service.db_client import reload_collection
+    count = reload_collection()
+    return {"ok": True, "documents": count}
+
 logger.info("Сервис запущен")

@@ -1,4 +1,57 @@
 services:
+  garage:
+    build:
+      context: .
+      dockerfile: Dockerfile.garage
+    environment:
+      - GARAGE_ADMIN_TOKEN=b17312060d5b4e572e8052dbb073d6e7
+      - S3_ACCESS_KEY_ID=GK39eb72624df14cf0b66afa79
+      - S3_SECRET_ACCESS_KEY=b607bde5e96a7f99175f9945441bd059d366e404655394e44f4bbc835b5accd7
+      - S3_BUCKET_NAME=video-bucket
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage_data:/var/lib/garage
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/3900' 2>/dev/null && echo 'OK' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 25s
+    networks:
+      - internal
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  admin_service:
+    build: ./admin_service
+    container_name: admin_service
+    restart: unless-stopped
+    env_file:
+      - ./admin_service/.env
+    ports:
+      - "8020:8020"
+    volumes:
+      - ./ai_service/chroma_db:/app/chroma_db
+      - ./ai_service/models:/app/models:ro
+    depends_on:
+      garage:
+        condition: service_healthy
+      ai_service:
+        condition: service_healthy
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+
   asterisk:
     image: mlan/asterisk:latest
     container_name: asterisk
@@ -22,6 +75,7 @@ services:
       - "9093:9093"                  # AudioSocket — Asterisk (хост) → сюда
     volumes:
       - telephony_torch_cache:/app/.torch_cache
+      - telephony_sessions:/app/sessions
     environment:
       - AI_SERVICE_URL=http://ai_service:8005
       - AUDIOSOCKET_PORT=9093
@@ -31,7 +85,6 @@ services:
       ai_service:
         condition: service_healthy
 
-  # Контейнер с rag-моделью НЕ ГОТОВ! УХОДИМ ОТ GROQ и вообще идем на локальный инференс
   ai_service:
     build: ./ai_service
     container_name: ai_service
@@ -57,20 +110,20 @@ services:
     # mem_limit: 160m
     # cpus: "0.2"
 
-  # voice_service:
-  #   build: ./voice_service
-  #   container_name: voice_service
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8010:8010"
-  #   volumes:
-  #     - voice_torch_cache:/app/.torch_cache
-  #   environment:
-  #     - AI_SERVICE_URL=http://ai_service:8005
-  #   networks:
-  #     - internal
-  #   depends_on:
-  #     - ai_service
+  voice_service:
+    build: ./voice_service
+    container_name: voice_service
+    restart: unless-stopped
+    ports:
+      - "8010:8010"
+    volumes:
+      - voice_torch_cache:/app/.torch_cache
+    environment:
+      - AI_SERVICE_URL=http://ai_service:8005
+    networks:
+      - internal
+    depends_on:
+      - ai_service
 
 networks:
   internal:
@@ -80,5 +133,7 @@ networks:
 volumes:
   voice_torch_cache:
   telephony_torch_cache:
+  telephony_sessions:
   ai_whisper_cache:
+  garage_data:
 

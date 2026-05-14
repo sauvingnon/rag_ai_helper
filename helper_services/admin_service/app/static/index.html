@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAG Admin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f0f2f5; color: #1a1a2e; }
+
+    /* ── Login ───────────────────────────────────── */
+    .login-screen {
+      min-height: 100vh; display: flex;
+      align-items: center; justify-content: center;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+    }
+    .login-card {
+      background: white; border-radius: 16px; padding: 44px 40px;
+      width: 380px; max-width: 95vw;
+      box-shadow: 0 32px 80px rgba(0,0,0,.45);
+    }
+    .login-logo { font-size: 22px; font-weight: 800; color: #2563eb; letter-spacing: 1px; margin-bottom: 6px; }
+    .login-sub  { font-size: 13px; color: #9ca3af; margin-bottom: 32px; }
+    .login-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
+    .login-field label { font-size: 12px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: .4px; }
+    .login-field input {
+      padding: 10px 12px; border: 1.5px solid #e5e7eb; border-radius: 8px;
+      font-size: 15px; outline: none; transition: border-color .15s;
+    }
+    .login-field input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+    .login-btn {
+      width: 100%; padding: 11px; background: #2563eb; color: white;
+      border: none; border-radius: 8px; font-size: 15px; font-weight: 600;
+      cursor: pointer; margin-top: 8px; transition: background .15s;
+    }
+    .login-btn:hover:not(:disabled) { background: #1d4ed8; }
+    .login-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .login-error { margin-top: 14px; padding: 10px 14px; background: #fef2f2; color: #b91c1c; border-radius: 8px; font-size: 13px; }
+
+    /* ── App shell ───────────────────────────────── */
+    .app { min-height: 100vh; display: flex; flex-direction: column; }
+    header {
+      background: #1a1a2e; color: white; padding: 0 28px;
+      display: flex; align-items: center; gap: 36px; height: 56px;
+      position: sticky; top: 0; z-index: 10;
+    }
+    .logo { font-size: 16px; font-weight: 700; letter-spacing: 1px; color: #60a5fa; }
+    nav { display: flex; gap: 2px; flex: 1; }
+    .tab-btn {
+      background: none; border: none; color: rgba(255,255,255,.55);
+      padding: 8px 18px; border-radius: 6px; cursor: pointer;
+      font-size: 14px; font-weight: 500; transition: all .15s;
+    }
+    .tab-btn:hover  { background: rgba(255,255,255,.08); color: white; }
+    .tab-btn.active { background: rgba(255,255,255,.14); color: white; }
+    .logout-btn {
+      margin-left: auto; background: none; border: 1px solid rgba(255,255,255,.25);
+      color: rgba(255,255,255,.7); padding: 6px 14px; border-radius: 6px;
+      cursor: pointer; font-size: 13px; transition: all .15s;
+    }
+    .logout-btn:hover { background: rgba(255,255,255,.1); color: white; }
+    main { padding: 28px; max-width: 1280px; margin: 0 auto; width: 100%; }
+
+    /* ── Shared ──────────────────────────────────── */
+    .tab-content { display: flex; flex-direction: column; gap: 18px; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; }
+    .toolbar h2 { font-size: 20px; font-weight: 600; }
+    .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .card { background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid #eff0f2; font-size: 14px; }
+    th { background: #f8f9fb; font-weight: 600; color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #fafbfc; }
+    .actions { display: flex; gap: 6px; white-space: nowrap; }
+    .loading, .empty { padding: 48px; text-align: center; color: #9ca3af; font-size: 14px; }
+    .full-loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 15px; background: #f0f2f5; }
+    .meta-info { padding: 10px 16px; font-size: 13px; color: #9ca3af; border-bottom: 1px solid #eff0f2; }
+    .text-cell { color: #4b5563; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dim { font-size: 12px; color: #9ca3af; }
+    .err-cell { color: #dc2626; font-size: 12px; max-width: 220px; word-break: break-word; }
+    .pagination { display: flex; align-items: center; gap: 12px; padding: 12px 16px; justify-content: center; border-top: 1px solid #eff0f2; font-size: 13px; color: #6b7280; }
+    .alert { padding: 12px 16px; border-radius: 8px; font-size: 14px; }
+    .alert-error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 7px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all .15s; white-space: nowrap; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+    .btn-ghost  { background: white; color: #374151; border: 1px solid #d1d5db; }
+    .btn-ghost:hover:not(:disabled)  { background: #f9fafb; }
+    .btn-success { background: #16a34a; color: white; }
+    .btn-success:hover:not(:disabled) { background: #15803d; }
+    .btn-danger { background: white; color: #dc2626; border: 1px solid #fca5a5; }
+    .btn-danger:hover:not(:disabled)  { background: #fff1f2; }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    select { padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 7px; font-size: 13px; background: white; cursor: pointer; }
+    .badge { display: inline-block; padding: 2px 9px; border-radius: 12px; font-size: 11px; font-weight: 600; background: #e5e7eb; color: #374151; }
+    .badge-done    { background: #dcfce7; color: #166534; }
+    .badge-running { background: #dbeafe; color: #1e40af; }
+    .badge-pending { background: #fef9c3; color: #854d0e; }
+    .badge-error   { background: #fee2e2; color: #991b1b; }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 100; }
+    .modal { background: white; border-radius: 12px; width: 520px; max-width: 95vw; box-shadow: 0 24px 64px rgba(0,0,0,.25); }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid #eff0f2; }
+    .modal-header h3 { font-size: 16px; font-weight: 600; }
+    .close-btn { background: none; border: none; font-size: 22px; cursor: pointer; color: #9ca3af; line-height: 1; }
+    .close-btn:hover { color: #374151; }
+    .modal-body { padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; max-height: 60vh; overflow-y: auto; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label { font-size: 12px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: .4px; }
+    .field input, .field textarea { padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 7px; font-size: 14px; font-family: inherit; outline: none; }
+    .field input:focus, .field textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+    .field textarea { resize: vertical; min-height: 80px; }
+    .modal-footer { display: flex; gap: 8px; justify-content: flex-end; padding: 16px 22px; border-top: 1px solid #eff0f2; }
+
+    /* ── Toasts ──────────────────────────────────── */
+    .toast-wrap { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 10px; z-index: 200; pointer-events: none; }
+    .toast {
+      pointer-events: all; display: flex; align-items: flex-start; gap: 10px;
+      padding: 12px 16px 12px 14px; border-radius: 10px; max-width: 380px;
+      font-size: 14px; line-height: 1.45;
+      box-shadow: 0 4px 24px rgba(0,0,0,.22);
+      animation: toast-in .22s ease;
+    }
+    .toast-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+    .toast-msg  { flex: 1; word-break: break-word; }
+    .toast-close { background: none; border: none; font-size: 18px; line-height: 1; cursor: pointer; opacity: .5; padding: 0; flex-shrink: 0; }
+    .toast-close:hover { opacity: 1; }
+    .toast-error   { background: #1c1c1e; color: #fb7185; border-left: 3px solid #ef4444; }
+    .toast-success { background: #1c1c1e; color: #4ade80; border-left: 3px solid #22c55e; }
+    .toast-info    { background: #1c1c1e; color: #93c5fd; border-left: 3px solid #3b82f6; }
+    .toast-close   { color: inherit; }
+    @keyframes toast-in { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+
+    /* ── FAQ ─────────────────────────────────────── */
+    .faq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 16px; }
+    .faq-card { background: white; border-radius: 12px; padding: 22px 24px; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+    .faq-step { display: flex; align-items: center; gap: 18px; padding: 14px 0; border-bottom: 1px solid #eff0f2; }
+    .faq-step:last-child { border-bottom: none; padding-bottom: 0; }
+    .faq-step:first-child { padding-top: 0; }
+    .faq-num  { width: 32px; height: 32px; border-radius: 50%; background: #2563eb; color: white; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .faq-step-text strong { display: block; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+    .faq-step-text span   { font-size: 13px; color: #6b7280; }
+    .faq-q { font-size: 15px; font-weight: 700; margin-bottom: 10px; color: #1a1a2e; display: flex; align-items: center; gap: 8px; }
+    .faq-q-icon { font-size: 18px; }
+    .faq-a { font-size: 14px; color: #4b5563; line-height: 1.7; }
+    .faq-a code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 13px; color: #0f172a; }
+    .faq-a strong { color: #1a1a2e; }
+    .faq-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: #9ca3af; margin-bottom: 12px; }
+    .faq-wide { grid-column: 1 / -1; }
+    .flow-row { display: flex; align-items: center; gap: 0; flex-wrap: wrap; margin-top: 12px; }
+    .flow-box { background: #f1f5f9; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; color: #1e40af; }
+    .flow-arrow { color: #9ca3af; font-size: 18px; padding: 0 6px; }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+const { createApp, ref, computed, reactive, onMounted, onUnmounted } = Vue
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+const _toasts = reactive([])
+let _tid = 0
+
+function toast(msg, type = 'error', duration = 4500) {
+  const id = ++_tid
+  _toasts.push({ id, msg, type })
+  if (duration > 0) setTimeout(() => _dismissToast(id), duration)
+}
+function _dismissToast(id) {
+  const i = _toasts.findIndex(t => t.id === id)
+  if (i !== -1) _toasts.splice(i, 1)
+}
+const ICONS = { error: '✕', success: '✓', info: 'ℹ' }
+
+const ToastContainer = {
+  setup() { return { toasts: _toasts, dismiss: _dismissToast, ICONS } },
+  template: `
+    <div class="toast-wrap">
+      <div v-for="t in toasts" :key="t.id" :class="['toast','toast-'+t.type]">
+        <span class="toast-icon">{{ ICONS[t.type] || '!' }}</span>
+        <span class="toast-msg">{{ t.msg }}</span>
+        <button class="toast-close" @click="dismiss(t.id)">×</button>
+      </div>
+    </div>
+  `
+}
+
+// ─── API fetch wrapper (глобальный обработчик 401) ────────────────────────────
+function apiFetch(url, opts = {}) {
+  return fetch(url, opts).then(r => {
+    if (r.status === 401) {
+      window.dispatchEvent(new Event('auth:unauthorized'))
+      return Promise.reject('unauthorized')
+    }
+    return r
+  })
+}
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+const authApi = {
+  me:     () => fetch('/auth/me'),
+  login:  (login, password) => fetch('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ login, password }),
+  }),
+  logout: () => fetch('/auth/logout', { method: 'POST' }),
+}
+
+const filesApi = {
+  list:     ()          => apiFetch('/admin/files').then(r => r.json()),
+  upload:   (file)      => {
+    const fd = new FormData(); fd.append('file', file)
+    return apiFetch('/admin/files', { method: 'POST', body: fd }).then(r => {
+      if (!r.ok) return r.json().then(e => Promise.reject(e.detail))
+      return r.json()
+    })
+  },
+  chunkStats: () => apiFetch('/admin/chunks/stats').then(r => r.json()),
+  download: (id, name)  => apiFetch(`/admin/files/${id}/download`).then(r => r.blob()).then(blob => {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+    a.download = name; a.click(); URL.revokeObjectURL(a.href)
+  }),
+  viewText: (id)        => apiFetch(`/admin/files/${id}/view`).then(r => r.text()),
+  delete:   (id)        => apiFetch(`/admin/files/${id}`, { method: 'DELETE' }),
+  index:    (id)        => apiFetch(`/admin/files/${id}/index`, { method: 'POST' }).then(r => {
+    if (!r.ok) return r.json().then(e => Promise.reject(e.detail)); return r.json()
+  }),
+}
+
+const chunksApi = {
+  list:   (p = {}) => {
+    const q = new URLSearchParams()
+    if (p.source_file_id) q.set('source_file_id', p.source_file_id)
+    if (p.offset != null) q.set('offset', p.offset)
+    if (p.limit  != null) q.set('limit',  p.limit)
+    return apiFetch(`/admin/chunks?${q}`).then(r => r.json())
+  },
+  update: (id, body) => apiFetch(`/admin/chunks/${encodeURIComponent(id)}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+  }).then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e.detail)); return r.json() }),
+  delete: (id) => apiFetch(`/admin/chunks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+}
+
+const tasksApi = { list: () => apiFetch('/admin/tasks').then(r => r.json()) }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function fmtSize(b) {
+  if (!b) return '—'
+  if (b < 1024) return b + ' Б'
+  if (b < 1048576) return (b/1024).toFixed(1) + ' КБ'
+  return (b/1048576).toFixed(1) + ' МБ'
+}
+function fmtDate(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+}
+function trunc(s, n=130) { if (!s) return '—'; return s.length > n ? s.slice(0,n)+'…' : s }
+
+// ─── LoginPage ────────────────────────────────────────────────────────────────
+const LoginPage = {
+  emits: ['success'],
+  template: `
+    <div class="login-screen">
+      <div class="login-card">
+        <div class="login-logo">RAG Admin</div>
+        <div class="login-sub">Панель управления базой знаний</div>
+        <form @submit.prevent="submit">
+          <div class="login-field">
+            <label>Логин</label>
+            <input v-model="login" type="text" autocomplete="username" autofocus />
+          </div>
+          <div class="login-field">
+            <label>Пароль</label>
+            <input v-model="password" type="password" autocomplete="current-password" />
+          </div>
+          <button class="login-btn" type="submit" :disabled="loading">
+            {{ loading ? 'Вход…' : 'Войти' }}
+          </button>
+        </form>
+        <div v-if="error" class="login-error">{{ error }}</div>
+      </div>
+    </div>
+  `,
+  setup(_, { emit }) {
+    const login    = ref('')
+    const password = ref('')
+    const loading  = ref(false)
+    const error    = ref('')
+
+    async function submit() {
+      if (!login.value || !password.value) return
+      loading.value = true; error.value = ''
+      try {
+        const r = await authApi.login(login.value, password.value)
+        if (!r.ok) {
+          const e = await r.json()
+          error.value = e.detail || 'Неверный логин или пароль'
+        } else {
+          emit('success')
+        }
+      } catch {
+        error.value = 'Ошибка соединения с сервером'
+      } finally {
+        loading.value = false
+      }
+    }
+    return { login, password, loading, error, submit }
+  }
+}
+
+// ─── FilesTab ─────────────────────────────────────────────────────────────────
+const TEXT_TYPES = new Set(['text/plain', 'text/yaml'])
+const PDF_TYPE   = 'application/pdf'
+
+const FilesTab = {
+  template: `
+    <div class="tab-content">
+      <div class="toolbar">
+        <h2>Файлы</h2>
+        <div class="toolbar-actions">
+          <label class="btn btn-primary">
+            + Загрузить
+            <input type="file" hidden accept=".yaml,.yml,.txt,.pdf,.docx" @change="onUpload" />
+          </label>
+          <button class="btn btn-ghost" @click="load">↻</button>
+        </div>
+      </div>
+      <div class="card">
+        <div v-if="loading" class="loading">Загрузка…</div>
+        <table v-else-if="files.length">
+          <thead><tr><th>Файл</th><th>Тип</th><th>Размер</th><th>Загружен</th><th>Чанки</th><th>Действия</th></tr></thead>
+          <tbody>
+            <tr v-for="f in files" :key="f.file_id">
+              <td>{{ f.filename }}</td>
+              <td class="dim">{{ extOf(f.filename) }}</td>
+              <td class="dim">{{ fmtSize(f.size_bytes) }}</td>
+              <td class="dim">{{ fmtDate(f.uploaded_at) }}</td>
+              <td>
+                <span v-if="stats[f.file_id]" class="badge badge-done">{{ stats[f.file_id] }}</span>
+                <span v-else class="badge" style="color:#9ca3af">—</span>
+              </td>
+              <td class="actions">
+                <button v-if="canPreview(f)" class="btn btn-sm btn-ghost" @click="preview(f)" title="Просмотр">👁</button>
+                <button class="btn btn-sm btn-ghost" @click="download(f)" title="Скачать">↓</button>
+                <button class="btn btn-sm btn-success" :disabled="indexing[f.file_id]" @click="index(f)">
+                  {{ indexing[f.file_id] ? '…' : '▶ Индекс' }}
+                </button>
+                <button class="btn btn-sm btn-danger" @click="remove(f)">✕</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="empty">Файлов нет. Загрузите первый файл.</div>
+      </div>
+
+      <!-- Модалка просмотра текстового файла -->
+      <div v-if="preview_file" class="modal-overlay" @click.self="closePreview">
+        <div class="modal" style="width:720px;max-width:96vw">
+          <div class="modal-header">
+            <h3>{{ preview_file.filename }}</h3>
+            <button class="close-btn" @click="closePreview">×</button>
+          </div>
+          <div class="modal-body" style="max-height:70vh;padding:0">
+            <div v-if="preview_loading" class="loading">Загрузка…</div>
+            <pre v-else style="margin:0;padding:16px 20px;font-size:13px;line-height:1.6;overflow:auto;white-space:pre-wrap;word-break:break-word;max-height:70vh">{{ preview_text }}</pre>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="download(preview_file)">↓ Скачать</button>
+            <button class="btn btn-ghost" @click="closePreview">Закрыть</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const files           = ref([])
+    const stats           = ref({})
+    const loading         = ref(false)
+    const indexing        = ref({})
+    const preview_file    = ref(null)
+    const preview_text    = ref('')
+    const preview_loading = ref(false)
+
+    function extOf(name) { return (name || '').split('.').pop()?.toUpperCase() || '?' }
+    function canPreview(f) { return TEXT_TYPES.has(f.content_type) || f.content_type === PDF_TYPE }
+
+    async function loadStats() {
+      try { stats.value = await filesApi.chunkStats() } catch {}
+    }
+
+    async function load() {
+      loading.value = true
+      try {
+        [files.value] = await Promise.all([filesApi.list(), loadStats()])
+      } catch (e) { if (e !== 'unauthorized') toast('Не удалось загрузить список файлов') }
+      finally { loading.value = false }
+    }
+    async function onUpload(e) {
+      const file = e.target.files[0]; if (!file) return; e.target.value = ''
+      try {
+        await filesApi.upload(file)
+        toast(`Файл «${file.name}» загружен`, 'success')
+        await load()
+      } catch (m) {
+        if (m !== 'unauthorized') toast(typeof m === 'string' ? m : `Ошибка загрузки «${file.name}»`)
+      }
+    }
+    async function download(f) {
+      try { await filesApi.download(f.file_id, f.filename) }
+      catch { toast(`Не удалось скачать «${f.filename}»`) }
+    }
+    async function preview(f) {
+      if (f.content_type === PDF_TYPE) {
+        window.open(`/admin/files/${f.file_id}/view`, '_blank')
+        return
+      }
+      preview_file.value = f; preview_text.value = ''
+      preview_loading.value = true
+      try { preview_text.value = await filesApi.viewText(f.file_id) }
+      catch { toast(`Не удалось загрузить содержимое «${f.filename}»`); preview_file.value = null }
+      finally { preview_loading.value = false }
+    }
+    function closePreview() { preview_file.value = null; preview_text.value = '' }
+    async function index(f) {
+      indexing.value = { ...indexing.value, [f.file_id]: true }
+      try {
+        await filesApi.index(f.file_id)
+        toast(`Индексация «${f.filename}» запущена`, 'success')
+        // Обновим статистику через 3 секунды — к тому моменту задача скорее всего завершится
+        setTimeout(loadStats, 3000)
+      } catch (m) {
+        if (m !== 'unauthorized') toast(typeof m === 'string' ? m : `Ошибка запуска индексации «${f.filename}»`)
+      } finally {
+        indexing.value = { ...indexing.value, [f.file_id]: false }
+      }
+    }
+    async function remove(f) {
+      if (!confirm(`Удалить файл «${f.filename}»?`)) return
+      try {
+        await filesApi.delete(f.file_id)
+        toast(`Файл «${f.filename}» удалён`, 'success')
+        await load()
+      } catch { toast(`Не удалось удалить «${f.filename}»`) }
+    }
+    onMounted(load)
+    return {
+      files, stats, loading, indexing,
+      preview_file, preview_text, preview_loading,
+      load, onUpload, download, preview, closePreview, index, remove,
+      fmtSize, fmtDate, extOf, canPreview,
+    }
+  }
+}
+
+// ─── ChunksTab ────────────────────────────────────────────────────────────────
+const ChunksTab = {
+  template: `
+    <div class="tab-content">
+      <div class="toolbar">
+        <h2>Чанки</h2>
+        <div class="toolbar-actions">
+          <select v-model="filterFileId" @change="resetAndLoad">
+            <option value="">Все файлы</option>
+            <option v-for="f in files" :key="f.file_id" :value="f.file_id">{{ f.filename }}</option>
+          </select>
+          <button class="btn btn-ghost" @click="load">↻</button>
+        </div>
+      </div>
+      <div class="card">
+        <div v-if="loading" class="loading">Загрузка…</div>
+        <template v-else>
+          <div class="meta-info">Найдено: {{ total }} чанков</div>
+          <table v-if="items.length">
+            <thead><tr><th style="width:200px">Название</th><th style="width:90px">Тип</th><th>Текст</th><th style="width:140px">Источник</th><th style="width:80px"></th></tr></thead>
+            <tbody>
+              <tr v-for="c in items" :key="c.id">
+                <td>{{ c.name || '—' }}</td>
+                <td><span class="badge">{{ c.type || 'general' }}</span></td>
+                <td class="text-cell">{{ trunc(c.text || c.document) }}</td>
+                <td class="dim">{{ c.source_filename || '—' }}</td>
+                <td class="actions">
+                  <button class="btn btn-sm btn-ghost" @click="openEdit(c)">✏</button>
+                  <button class="btn btn-sm btn-danger" @click="remove(c.id)">✕</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="empty">Чанков нет.</div>
+          <div v-if="total > limit" class="pagination">
+            <button class="btn btn-ghost btn-sm" :disabled="offset === 0" @click="prevPage">← Назад</button>
+            <span>{{ currentPage }} / {{ totalPages }}</span>
+            <button class="btn btn-ghost btn-sm" :disabled="offset + limit >= total" @click="nextPage">Вперёд →</button>
+          </div>
+        </template>
+      </div>
+      <div v-if="editChunk" class="modal-overlay" @click.self="editChunk = null">
+        <div class="modal">
+          <div class="modal-header">
+            <h3>Редактировать чанк</h3>
+            <button class="close-btn" @click="editChunk = null">×</button>
+          </div>
+          <div class="modal-body">
+            <div class="field"><label>Название</label><input v-model="editForm.name" type="text" /></div>
+            <div class="field"><label>Тип</label><input v-model="editForm.type" type="text" /></div>
+            <div class="field"><label>Текст</label><textarea v-model="editForm.text" rows="6"></textarea></div>
+            <div class="field"><label>Ключевые слова</label><input v-model="editForm.keywords" type="text" /></div>
+            <div class="field"><label>Примечания</label><input v-model="editForm.notes" type="text" /></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="editChunk = null">Отмена</button>
+            <button class="btn btn-primary" :disabled="saving" @click="saveEdit">{{ saving ? 'Сохранение…' : 'Сохранить' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const LIMIT = 50
+    const items        = ref([])
+    const files        = ref([])
+    const loading      = ref(false)
+    const total        = ref(0)
+    const offset       = ref(0)
+    const limit        = LIMIT
+    const filterFileId = ref('')
+    const editChunk    = ref(null)
+    const editForm     = ref({})
+    const saving       = ref(false)
+
+    const currentPage = computed(() => Math.floor(offset.value / limit) + 1)
+    const totalPages  = computed(() => Math.ceil(total.value / limit))
+
+    async function load() {
+      loading.value = true
+      try {
+        const res = await chunksApi.list({ source_file_id: filterFileId.value || undefined, offset: offset.value, limit })
+        items.value = res.items; total.value = res.total
+      } catch (e) { if (e !== 'unauthorized') toast('Не удалось загрузить чанки') }
+      finally { loading.value = false }
+    }
+    function resetAndLoad() { offset.value = 0; load() }
+    async function loadFiles() { try { files.value = await filesApi.list() } catch {} }
+
+    function openEdit(c) {
+      editChunk.value = c
+      editForm.value = { name: c.name||'', type: c.type||'general', text: c.text||'', keywords: c.keywords||'', notes: c.notes||'' }
+    }
+    async function saveEdit() {
+      saving.value = true
+      try {
+        await chunksApi.update(editChunk.value.id, editForm.value)
+        toast('Чанк сохранён', 'success')
+        editChunk.value = null; await load()
+      } catch (m) {
+        if (m !== 'unauthorized') toast(typeof m === 'string' ? m : 'Ошибка сохранения чанка')
+      } finally { saving.value = false }
+    }
+    async function remove(id) {
+      if (!confirm('Удалить чанк?')) return
+      try { await chunksApi.delete(id); toast('Чанк удалён', 'success'); await load() }
+      catch (e) { if (e !== 'unauthorized') toast('Не удалось удалить чанк') }
+    }
+    function prevPage() { offset.value = Math.max(0, offset.value - limit); load() }
+    function nextPage() { offset.value += limit; load() }
+
+    onMounted(() => { load(); loadFiles() })
+    return { items, files, loading, total, offset, limit, filterFileId, editChunk, editForm, saving, currentPage, totalPages, resetAndLoad, load, openEdit, saveEdit, remove, prevPage, nextPage, trunc }
+  }
+}
+
+// ─── TasksTab ─────────────────────────────────────────────────────────────────
+const TasksTab = {
+  template: `
+    <div class="tab-content">
+      <div class="toolbar">
+        <h2>Задачи индексации</h2>
+        <button class="btn btn-ghost" @click="load">↻</button>
+      </div>
+      <div class="card">
+        <div v-if="loading && !tasks.length" class="loading">Загрузка…</div>
+        <table v-else-if="tasks.length">
+          <thead><tr><th>Файл</th><th>Статус</th><th>+ чанков</th><th>− старых</th><th>Создана</th><th>Завершена</th><th>Ошибка</th></tr></thead>
+          <tbody>
+            <tr v-for="t in tasks" :key="t.task_id">
+              <td>{{ t.filename }}</td>
+              <td><span :class="['badge', 'badge-' + t.status]">{{ labels[t.status] || t.status }}</span></td>
+              <td class="dim">{{ t.chunks_added || '—' }}</td>
+              <td class="dim">{{ t.chunks_deleted || '—' }}</td>
+              <td class="dim">{{ fmtDate(t.created_at) }}</td>
+              <td class="dim">{{ fmtDate(t.finished_at) }}</td>
+              <td class="err-cell">{{ t.error || '' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="empty">Задач нет. Запустите индексацию из вкладки <b>Файлы</b>.</div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const tasks   = ref([])
+    const loading = ref(false)
+    const labels  = { pending: 'ожидание', running: 'выполняется', done: 'готово', error: 'ошибка' }
+    let timer = null
+
+    async function load() {
+      loading.value = true
+      try { tasks.value = await tasksApi.list() } catch {}
+      finally { loading.value = false }
+      const hasActive = tasks.value.some(t => t.status === 'running' || t.status === 'pending')
+      if (hasActive && !timer)  timer = setInterval(load, 3000)
+      if (!hasActive && timer)  { clearInterval(timer); timer = null }
+    }
+    onMounted(load)
+    onUnmounted(() => { if (timer) { clearInterval(timer); timer = null } })
+    return { tasks, loading, labels, load, fmtDate }
+  }
+}
+
+// ─── HelpTab ──────────────────────────────────────────────────────────────────
+const HelpTab = {
+  template: `
+    <div class="tab-content">
+      <div class="toolbar"><h2>Справка</h2></div>
+      <div class="faq-grid">
+
+        <!-- Как это работает -->
+        <div class="faq-card faq-wide">
+          <div class="faq-title">Как это работает</div>
+          <div class="flow-row">
+            <div class="flow-box">📄 Загрузить файл</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-box">▶ Нажать «Индекс»</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-box">🤖 ИИ разбивает на чанки</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-box">🔍 Ассистент ищет по ним</div>
+          </div>
+        </div>
+
+        <!-- Что делает Индекс -->
+        <div class="faq-card">
+          <div class="faq-q"><span class="faq-q-icon">▶</span> Что делает кнопка «Индекс»?</div>
+          <div class="faq-a">
+            Это главная кнопка. Без неё ассистент <strong>не знает о содержимом файла</strong> — он просто лежит в хранилище.
+            При нажатии запускается фоновая задача:
+          </div>
+          <div style="margin-top:14px">
+            <div class="faq-step">
+              <div class="faq-num">1</div>
+              <div class="faq-step-text"><strong>Читает файл из хранилища</strong><span>Скачивает документ из Garage S3</span></div>
+            </div>
+            <div class="faq-step">
+              <div class="faq-num">2</div>
+              <div class="faq-step-text"><strong>Разбивает на смысловые чанки</strong><span>ИИ (DeepSeek) выделяет блоки с названием, типом, ключевыми словами</span></div>
+            </div>
+            <div class="faq-step">
+              <div class="faq-num">3</div>
+              <div class="faq-step-text"><strong>Считает векторы</strong><span>Каждый чанк превращается в числовой вектор через SBERT-модель</span></div>
+            </div>
+            <div class="faq-step">
+              <div class="faq-num">4</div>
+              <div class="faq-step-text"><strong>Сохраняет в ChromaDB</strong><span>Теперь ассистент может находить нужные фрагменты при ответах</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FAQ карточки -->
+        <div class="faq-card">
+          <div class="faq-q"><span class="faq-q-icon">📁</span> Какие форматы поддерживаются?</div>
+          <div class="faq-a">
+            <code>.txt</code> &nbsp;<code>.yaml</code> / <code>.yml</code> &nbsp;<code>.pdf</code> &nbsp;<code>.docx</code><br><br>
+            Для <strong>TXT и YAML</strong> — кнопка 👁 показывает содержимое прямо в панели.<br>
+            Для <strong>PDF</strong> — открывается в новой вкладке браузера.<br>
+            Для <strong>DOCX</strong> — просмотр недоступен, только скачивание.<br><br>
+            Большие файлы (PDF, DOCX, TXT) <strong>разбиваются на части автоматически</strong> — ограничений по объёму нет. YAML-файлы парсятся напрямую без LLM.
+          </div>
+        </div>
+
+        <div class="faq-card">
+          <div class="faq-q"><span class="faq-q-icon">🧩</span> Что такое «Чанки»?</div>
+          <div class="faq-a">
+            Чанк — смысловой фрагмент документа. У каждого есть:<br><br>
+            <strong>Название</strong> — о чём этот блок<br>
+            <strong>Тип</strong> — категория (например, «кафедра», «направление»)<br>
+            <strong>Текст</strong> — основное содержимое<br>
+            <strong>Ключевые слова</strong> — для точного поиска<br><br>
+            Именно по чанкам ассистент ищет ответы. В разделе «Чанки» их можно просматривать, редактировать и удалять вручную.
+          </div>
+        </div>
+
+        <div class="faq-card">
+          <div class="faq-q"><span class="faq-q-icon">🔁</span> Что если нажать «Индекс» повторно?</div>
+          <div class="faq-a">
+            Старые чанки этого файла <strong>удалятся</strong>, и на их место запишутся новые.<br><br>
+            Это нужно, например, если вы заменили файл или хотите переиндексировать с новыми настройками. Данные других файлов не затрагиваются.
+          </div>
+        </div>
+
+        <div class="faq-card">
+          <div class="faq-q"><span class="faq-q-icon">📋</span> Что такое раздел «Задачи»?</div>
+          <div class="faq-a">
+            Каждый запуск индексации — это фоновая задача. Статусы:<br><br>
+            <span class="badge badge-pending">ожидание</span> — стоит в очереди<br><br>
+            <span class="badge badge-running">выполняется</span> — идёт прямо сейчас<br><br>
+            <span class="badge badge-done">готово</span> — успешно завершена, чанки добавлены<br><br>
+            <span class="badge badge-error">ошибка</span> — что-то пошло не так, описание рядом
+          </div>
+        </div>
+
+        <div class="faq-card">
+          <div class="faq-q"><span class="faq-q-icon">⚡</span> Правильный порядок действий</div>
+          <div class="faq-a">
+            1. Нажмите <strong>«+ Загрузить»</strong> и выберите файл<br>
+            2. Убедитесь, что файл появился в таблице<br>
+            3. Нажмите <strong>«▶ Индекс»</strong> напротив файла<br>
+            4. Дождитесь пока в колонке <strong>«Чанки»</strong> появится зелёный счётчик — файл проиндексирован<br>
+            5. Если что-то пошло не так — загляните в раздел <strong>«Задачи»</strong>, там будет описание ошибки
+          </div>
+        </div>
+
+      </div>
+    </div>
+  `
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+createApp({
+  components: { LoginPage, FilesTab, ChunksTab, TasksTab, HelpTab, ToastContainer },
+  template: `
+    <div>
+      <ToastContainer />
+      <div v-if="checking" class="full-loading">Загрузка…</div>
+      <LoginPage v-else-if="!loggedIn" @success="loggedIn = true" />
+      <div v-else class="app">
+        <header>
+          <span class="logo">RAG Admin</span>
+          <nav>
+            <button v-for="t in tabs" :key="t.key"
+              :class="['tab-btn', { active: cur === t.key }]"
+              @click="cur = t.key">{{ t.label }}</button>
+          </nav>
+          <button class="logout-btn" @click="logout">Выйти</button>
+        </header>
+        <main>
+          <FilesTab  v-if="cur === 'files'" />
+          <ChunksTab v-else-if="cur === 'chunks'" />
+          <TasksTab  v-else-if="cur === 'tasks'" />
+          <HelpTab   v-else-if="cur === 'help'" />
+        </main>
+      </div>
+    </div>
+  `,
+  setup() {
+    const tabs     = [{ key:'files', label:'Файлы' }, { key:'chunks', label:'Чанки' }, { key:'tasks', label:'Задачи' }, { key:'help', label:'Справка' }]
+    const cur      = ref('files')
+    const loggedIn = ref(false)
+    const checking = ref(true)
+
+    onMounted(async () => {
+      const r = await authApi.me()
+      loggedIn.value = r.ok
+      checking.value = false
+    })
+
+    // Глобальный 401 — выкидываем на логин
+    window.addEventListener('auth:unauthorized', () => {
+      loggedIn.value = false
+      toast('Сессия истекла — войдите снова', 'info')
+    })
+
+    async function logout() {
+      await authApi.logout()
+      loggedIn.value = false
+    }
+
+    return { tabs, cur, loggedIn, checking, logout }
+  }
+}).mount('#app')
+</script>
+</body>
+</html>

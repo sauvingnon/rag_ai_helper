@@ -38,12 +38,14 @@ def load_yaml_files(data_dir: Path) -> list[dict]:
 
 def build_enriched_text(ch: dict) -> str:
     """Формируем текст для эмбеддинга"""
-    # Обратим внимание, эмбеддинг формируется из имени, описания и ключевых слов
     parts = [ch.get("name", "")]
     if ch.get("text"):
         parts.append(f"Описание: {ch['text']}")
     if ch.get("keywords"):
         parts.append(f"Ключевые слова: {ch['keywords']}")
+    notes = ch.get("meta", {}).get("notes", "")
+    if notes:
+        parts.append(f"Контакты и примечания: {notes}")
     return "\n".join(parts)
 
 
@@ -76,7 +78,7 @@ def main():
     ids = []
     metadatas = []
     for ch in chunks:
-        doc_id = ch.get("id") or ch.get("name", f"doc_{len(ids)}")
+        doc_id = ch.get("id") or f"{ch.get('name', 'doc')}_{len(ids)}"
         ids.append(doc_id)
 
         meta = ch.get("meta", {})
