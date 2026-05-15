@@ -89,6 +89,13 @@ services:
     build: ./ai_service
     container_name: ai_service
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       - ./ai_service/chroma_db:/app/services/embeddings_service/chroma_db
       - ./ai_service/models:/app/services/embeddings_service/models

@@ -1,7 +1,7 @@
 # Входная точка сервиса по перенаправлению запросов на API сторонних моделей.
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from app.api.endpoints import message_chat
+from app.api.endpoints import message_chat, eval_endpoint
 from app.services.llm_service.llm_request import _get_whisper
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
@@ -37,6 +37,7 @@ app = FastAPI(debug=True, lifespan=lifespan)
 
 # Подключаем роутеры
 app.include_router(message_chat.router)
+app.include_router(eval_endpoint.router)
 
 @app.get("/health")
 async def health():

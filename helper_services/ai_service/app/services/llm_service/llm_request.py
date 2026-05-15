@@ -370,12 +370,24 @@ _whisper: WhisperModel | None = None
 def _get_whisper() -> WhisperModel:
     global _whisper
     if _whisper is None:
-        logger.info("Loading Whisper model (%s, cpu)...", WHISPER_MODEL)
-        _whisper = WhisperModel(
-            WHISPER_MODEL, device="cpu", compute_type="int8",
-            download_root="/app/.whisper_cache",
-        )
-        logger.info("Whisper ready")
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        compute_type = "float16" if device == "cuda" else "int8"
+        logger.info("Loading Whisper model (%s, %s, %s)...", WHISPER_MODEL, device, compute_type)
+        try:
+            _whisper = WhisperModel(
+                WHISPER_MODEL, device=device, compute_type=compute_type,
+                download_root="/app/.whisper_cache",
+            )
+        except ValueError:
+            # Pascal GPU (GTX 10xx) не поддерживает float16 — используем int8 на CUDA
+            compute_type = "int8"
+            logger.info("float16 недоступен, переключаюсь на %s/%s", device, compute_type)
+            _whisper = WhisperModel(
+                WHISPER_MODEL, device=device, compute_type=compute_type,
+                download_root="/app/.whisper_cache",
+            )
+        logger.info("Whisper ready (%s/%s)", device, compute_type)
     return _whisper
 
 

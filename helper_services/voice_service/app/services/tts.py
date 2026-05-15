@@ -26,14 +26,20 @@ def load_model() -> None:
     logger.info("Silero TTS ready")
 
 
+def _digit_pairs(s: str) -> str:
+    """'3412' → '34, 12'  |  '776055' → '77, 60, 55'"""
+    s = re.sub(r"[\s\-]", "", s)
+    return ", ".join(s[i:i+2] for i in range(0, len(s), 2))
+
+
 def _clean(text: str) -> str:
     text = re.sub(r"[*_`#>]", "", text)
-    # телефоны: 8(3412)77-62-62 → 8, 3412, 77 62 62
+    # телефоны: 8(3412)77-62-62 → 8, 34, 12, 77, 60, 55
     text = re.sub(
         r'8\s*\((\d{3,4})\)\s*([\d][\d\-\s]+\d)(?:\s*доб\.?\s*(\d+))?',
         lambda m: (
-            f"8, {m.group(1)}, {re.sub(r'[-]', ' ', m.group(2)).strip()}"
-            + (f", добавочный {m.group(3)}" if m.group(3) else "")
+            f"8, {_digit_pairs(m.group(1))}, {_digit_pairs(m.group(2))}"
+            + (f", добавочный {_digit_pairs(m.group(3))}" if m.group(3) else "")
         ),
         text,
     )
