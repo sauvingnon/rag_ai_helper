@@ -17,6 +17,7 @@
       <FilesTab v-if="currentTab === 'files'" />
       <ChunksTab v-else-if="currentTab === 'chunks'" />
       <TasksTab v-else-if="currentTab === 'tasks'" />
+      <SystemTab v-else-if="currentTab === 'system'" />
     </main>
   </div>
 </template>
@@ -26,11 +27,13 @@ import { ref } from 'vue'
 import FilesTab from './components/FilesTab.vue'
 import ChunksTab from './components/ChunksTab.vue'
 import TasksTab from './components/TasksTab.vue'
+import SystemTab from './components/SystemTab.vue'
 
 const tabs = [
   { key: 'files',  label: 'Файлы' },
   { key: 'chunks', label: 'Чанки' },
   { key: 'tasks',  label: 'Задачи' },
+  { key: 'system', label: 'Система' },
 ]
 const currentTab = ref('files')
 </script>
@@ -105,7 +108,9 @@ tr:hover td { background: #fafbfc; }
 
 /* ── Alert ─────────────────────────────────────── */
 .alert { padding: 12px 16px; border-radius: 8px; font-size: 14px; }
-.alert-error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+.alert-error   { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+.alert-warning { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+.alert-success { background: #f0fdf4; color: #166534; border: 1px solid #86efac; }
 
 /* ── Buttons ───────────────────────────────────── */
 .btn {
@@ -123,6 +128,8 @@ tr:hover td { background: #fafbfc; }
 .btn-success:hover:not(:disabled)  { background: #15803d; }
 .btn-danger    { background: white; color: #dc2626; border: 1px solid #fca5a5; }
 .btn-danger:hover:not(:disabled)   { background: #fff1f2; }
+.btn-warning   { background: #d97706; color: white; }
+.btn-warning:hover:not(:disabled)  { background: #b45309; }
 .btn-sm        { padding: 5px 10px; font-size: 12px; }
 
 /* ── Select ────────────────────────────────────── */

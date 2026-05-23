@@ -148,6 +148,9 @@
     .faq-a strong { color: #1a1a2e; }
     .faq-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: #9ca3af; margin-bottom: 12px; }
     .faq-wide { grid-column: 1 / -1; }
+    .perf-card { background: #f8f9fb; border-radius: 8px; padding: 10px 14px; }
+    .perf-label { font-size: 11px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 4px; }
+    .perf-val { font-size: 18px; font-weight: 700; color: #1a1a2e; }
     .flow-row { display: flex; align-items: center; gap: 0; flex-wrap: wrap; margin-top: 12px; }
     .flow-box { background: #f1f5f9; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; color: #1e40af; }
     .flow-arrow { color: #9ca3af; font-size: 18px; padding: 0 6px; }
@@ -158,7 +161,7 @@
 
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script>
-const { createApp, ref, computed, reactive, onMounted, onUnmounted } = Vue
+const { createApp, ref, computed, reactive, onMounted, onUnmounted, watch } = Vue
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
 const _toasts = reactive([])
@@ -249,6 +252,43 @@ const chunksApi = {
 }
 
 const tasksApi = { list: () => apiFetch('/admin/tasks').then(r => r.json()) }
+
+const systemApi = {
+  sessionsStats: () => apiFetch('/admin/sessions/stats').then(r => r.json()),
+  clearSessions: () => apiFetch('/admin/sessions/all', { method: 'DELETE' }).then(r => {
+    if (!r.ok) return r.json().then(e => Promise.reject(e.detail || 'Ошибка'))
+    return r.json()
+  }),
+  reloadDb: () => apiFetch('/admin/ai/reload-db', { method: 'POST' }).then(r => {
+    if (!r.ok) return r.json().then(e => Promise.reject(e.error || 'Ошибка'))
+    return r.json()
+  }),
+  reindexAll: () => apiFetch('/admin/files/reindex-all', { method: 'POST' }).then(r => {
+    if (!r.ok) return r.json().then(e => Promise.reject(e.detail || 'Ошибка'))
+    return r.json()
+  }),
+}
+
+const perfApi = {
+  list: (limit = 100) => apiFetch(`/admin/perf-logs?limit=${limit}`).then(r => r.json()),
+}
+
+const dialogsApi = {
+  list: (p = {}) => {
+    const q = new URLSearchParams()
+    if (p.source) q.set('source', p.source)
+    if (p.status) q.set('status', p.status)
+    if (p.offset != null) q.set('offset', p.offset)
+    if (p.limit  != null) q.set('limit',  p.limit)
+    return apiFetch(`/admin/dialogs?${q}`).then(r => r.json())
+  },
+  delete: (id) => apiFetch(`/admin/dialogs/${id}`, { method: 'DELETE' }),
+  setStatus: (id, status) => apiFetch(`/admin/dialogs/${id}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  }).then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e.detail || 'Ошибка')); return r.json() }),
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtSize(b) {
@@ -770,9 +810,466 @@ const HelpTab = {
   `
 }
 
+// ─── SystemTab ────────────────────────────────────────────────────────────────
+const SystemTab = {
+  template: `
+    <div class="tab-content">
+      <div class="toolbar"><h2>Система</h2></div>
+
+      <div class="card">
+        <div style="padding:18px 22px 14px;border-bottom:1px solid #eff0f2">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+            <div>
+              <div style="font-size:15px;font-weight:600;margin-bottom:4px">История звонков (телефония)</div>
+              <div style="font-size:13px;color:#6b7280">JSON-файлы с историей диалогов по каждому номеру телефона. Хранятся в volume <code style="background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px">telephony_sessions</code>.</div>
+            </div>
+            <div style="font-size:13px;color:#9ca3af;white-space:nowrap;padding-top:2px">Файлов: <strong>{{ sessionCount ?? '…' }}</strong></div>
+          </div>
+        </div>
+        <div style="padding:14px 22px 18px;display:flex;flex-direction:column;gap:10px">
+          <div v-if="sessionsStatus === 'ok'" class="alert" style="background:#f0fdf4;color:#166534;border:1px solid #86efac">✓ Удалено {{ deletedCount }} файлов сессий.</div>
+          <div v-if="sessionsStatus === 'error'" class="alert" style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca">{{ sessionsError }}</div>
+          <button class="btn btn-danger" :disabled="sessionsStatus === 'loading' || sessionCount === 0" @click="clearSessions">
+            {{ sessionsStatus === 'loading' ? 'Очистка…' : 'Очистить историю звонков' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="padding:18px 22px">
+          <div style="font-size:15px;font-weight:600;margin-bottom:4px">История голосового чата (браузер)</div>
+          <div style="font-size:13px;color:#6b7280">Хранится только в памяти браузера. Каждое новое подключение начинает диалог заново — очистка на сервере не требуется.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="padding:18px 22px 14px;border-bottom:1px solid #eff0f2">
+          <div style="font-size:15px;font-weight:600;margin-bottom:4px">Переиндексация всех файлов</div>
+          <div style="font-size:13px;color:#6b7280">Пересчитывает эмбеддинги для всех файлов в хранилище. Используй после смены модели или переезда на GPU.</div>
+        </div>
+        <div style="padding:14px 22px 18px;display:flex;flex-direction:column;gap:10px">
+          <div v-if="reindexStatus === 'ok'" class="alert" style="background:#f0fdf4;color:#166534;border:1px solid #86efac">✓ Запущена переиндексация {{ reindexStarted }} файлов. Следи за прогрессом во вкладке Задачи.</div>
+          <div v-if="reindexStatus === 'error'" class="alert" style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca">{{ reindexError }}</div>
+          <button class="btn btn-primary" :disabled="reindexStatus === 'loading'" @click="reindexAll">
+            {{ reindexStatus === 'loading' ? 'Запуск…' : '↺ Переиндексировать все файлы' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="padding:18px 22px 14px;border-bottom:1px solid #eff0f2">
+          <div style="font-size:15px;font-weight:600;margin-bottom:4px">База знаний ИИ (ChromaDB)</div>
+          <div style="font-size:13px;color:#6b7280">Принудительно перезагружает коллекцию в ai_service — после ручных правок чанков.</div>
+        </div>
+        <div style="padding:14px 22px 18px;display:flex;flex-direction:column;gap:10px">
+          <div v-if="reloadStatus === 'ok'" class="alert" style="background:#f0fdf4;color:#166534;border:1px solid #86efac">✓ База знаний обновлена.</div>
+          <div v-if="reloadStatus === 'error'" class="alert" style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca">{{ reloadError }}</div>
+          <button class="btn btn-warning" :disabled="reloadStatus === 'loading'" @click="reloadDb"
+            style="background:#d97706;color:white;border:none">
+            {{ reloadStatus === 'loading' ? 'Обновление…' : '⟳ Перезагрузить ChromaDB' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const sessionCount    = ref(null)
+    const deletedCount    = ref(0)
+    const sessionsStatus  = ref('idle')
+    const sessionsError   = ref('')
+    const reloadStatus    = ref('idle')
+    const reloadError     = ref('')
+    const reindexStatus   = ref('idle')
+    const reindexError    = ref('')
+    const reindexStarted  = ref(0)
+
+    async function loadStats() {
+      try { const d = await systemApi.sessionsStats(); sessionCount.value = d.count }
+      catch { sessionCount.value = null }
+    }
+
+    async function clearSessions() {
+      if (!confirm(`Удалить ${sessionCount.value} файлов истории звонков?`)) return
+      sessionsStatus.value = 'loading'; sessionsError.value = ''
+      try {
+        const d = await systemApi.clearSessions()
+        deletedCount.value = d.deleted; sessionsStatus.value = 'ok'; sessionCount.value = 0
+        setTimeout(() => { sessionsStatus.value = 'idle' }, 4000)
+      } catch (e) {
+        sessionsError.value = typeof e === 'string' ? e : 'Ошибка очистки сессий'
+        sessionsStatus.value = 'error'
+      }
+    }
+
+    async function reloadDb() {
+      reloadStatus.value = 'loading'; reloadError.value = ''
+      try {
+        await systemApi.reloadDb()
+        reloadStatus.value = 'ok'
+        toast('База знаний обновлена', 'success')
+        setTimeout(() => { reloadStatus.value = 'idle' }, 3000)
+      } catch (e) {
+        reloadError.value = typeof e === 'string' ? e : 'Ошибка реиндексации'
+        reloadStatus.value = 'error'
+      }
+    }
+
+    async function reindexAll() {
+      if (!confirm('Запустить переиндексацию всех файлов? Это может занять несколько минут.')) return
+      reindexStatus.value = 'loading'; reindexError.value = ''
+      try {
+        const d = await systemApi.reindexAll()
+        reindexStarted.value = d.started; reindexStatus.value = 'ok'
+        toast(`Переиндексация запущена для ${d.started} файлов`, 'success')
+        setTimeout(() => { reindexStatus.value = 'idle' }, 6000)
+      } catch (e) {
+        reindexError.value = typeof e === 'string' ? e : 'Ошибка запуска переиндексации'
+        reindexStatus.value = 'error'
+      }
+    }
+
+    onMounted(loadStats)
+    return { sessionCount, deletedCount, sessionsStatus, sessionsError, reloadStatus, reloadError, reindexStatus, reindexError, reindexStarted, clearSessions, reloadDb, reindexAll }
+  }
+}
+
+// ─── PerfTab ──────────────────────────────────────────────────────────────────
+const PerfTab = {
+  template: `
+    <div class="tab-content">
+      <div class="toolbar">
+        <h2>Производительность</h2>
+        <div class="toolbar-actions">
+          <label style="font-size:13px;color:#6b7280;display:flex;align-items:center;gap:6px">
+            <input type="checkbox" v-model="autoRefresh" /> Авто-обновление 10с
+          </label>
+          <button class="btn btn-ghost" @click="load">↻</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div v-if="loading && !records.length" class="loading">Загрузка…</div>
+        <template v-else>
+          <div class="meta-info">Последние {{ records.length }} запросов · Устройство: <strong>{{ device }}</strong></div>
+          <table v-if="records.length">
+            <thead>
+              <tr>
+                <th>Время</th>
+                <th>Запрос</th>
+                <th>STT</th>
+                <th>LLM</th>
+                <th>Поисков</th>
+                <th>Итого</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(r, i) in records" :key="i" style="cursor:pointer" @click="selected = r">
+                <td class="dim" style="white-space:nowrap">{{ fmtDate(r.ts) }}</td>
+                <td class="text-cell" style="max-width:260px">{{ trunc(r.query, 60) }}</td>
+                <td class="dim">{{ r.stt_sec != null ? r.stt_sec + 'с' : '—' }}</td>
+                <td class="dim">{{ llmSec(r) }}</td>
+                <td>
+                  <span v-if="r.search_count" class="badge badge-running">{{ r.search_count }}</span>
+                  <span v-else class="badge">0</span>
+                </td>
+                <td>
+                  <span :style="{fontWeight:600, color: r.total_sec > 8 ? '#dc2626' : r.total_sec > 4 ? '#d97706' : '#16a34a'}">
+                    {{ r.total_sec }}с
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="empty">Запросов пока нет. Задай вопрос ассистенту.</div>
+        </template>
+      </div>
+
+      <!-- Детали запроса -->
+      <div v-if="selected" class="modal-overlay" @click.self="selected = null">
+        <div class="modal" style="width:700px;max-width:96vw">
+          <div class="modal-header">
+            <h3>Детали запроса</h3>
+            <button class="close-btn" @click="selected = null">×</button>
+          </div>
+          <div class="modal-body" style="max-height:70vh;font-size:13px;gap:12px">
+
+            <div style="background:#f8f9fb;border-radius:8px;padding:12px 14px">
+              <div style="font-weight:600;margin-bottom:6px;color:#374151">Запрос</div>
+              <div style="color:#1e293b;line-height:1.5">{{ selected.query }}</div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px">
+              <div class="perf-card">
+                <div class="perf-label">Устройство</div>
+                <div class="perf-val">{{ selected.device }}</div>
+              </div>
+              <div class="perf-card" v-if="selected.stt_sec != null">
+                <div class="perf-label">STT (Whisper)</div>
+                <div class="perf-val">{{ selected.stt_sec }} с</div>
+              </div>
+              <div class="perf-card">
+                <div class="perf-label">Поисков</div>
+                <div class="perf-val">{{ selected.search_count }}</div>
+              </div>
+              <div class="perf-card" v-if="selected.first_token_sec">
+                <div class="perf-label">Первый токен</div>
+                <div class="perf-val">{{ selected.first_token_sec }} с</div>
+              </div>
+              <div class="perf-card">
+                <div class="perf-label">Итого</div>
+                <div class="perf-val" :style="{color: selected.total_sec > 8 ? '#dc2626' : '#16a34a'}">{{ selected.total_sec }} с</div>
+              </div>
+            </div>
+
+            <div v-if="selected.llm_calls && selected.llm_calls.length">
+              <div style="font-weight:600;margin-bottom:6px;color:#374151">LLM вызовы</div>
+              <div v-for="(c, i) in selected.llm_calls" :key="i"
+                style="display:flex;justify-content:space-between;padding:6px 10px;background:#f1f5f9;border-radius:6px;margin-bottom:4px">
+                <span>{{ llmCallLabel(c.type) }}</span>
+                <span style="color:#6b7280">{{ c.sec }} с</span>
+              </div>
+            </div>
+
+            <div v-if="selected.searches && selected.searches.length">
+              <div style="font-weight:600;margin-bottom:6px;color:#374151">Поиски</div>
+              <div v-for="(s, i) in selected.searches" :key="i"
+                style="background:#eff6ff;border-radius:8px;padding:10px 12px;margin-bottom:6px">
+                <div style="color:#1e40af;font-weight:600;margin-bottom:4px">
+                  {{ s.forced ? '⚡ Форс: ' : '' }}{{ s.query }}
+                </div>
+                <div style="display:flex;gap:16px;color:#6b7280">
+                  <span>Поиск: {{ s.search_sec }} с</span>
+                  <span>Ребранк: {{ s.rerank_sec }} с</span>
+                  <span>Чанки: {{ s.chunks_in }} → {{ s.chunks_out }}</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="selected = null">Закрыть</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const records     = ref([])
+    const loading     = ref(false)
+    const selected    = ref(null)
+    const autoRefresh = ref(false)
+    let timer = null
+
+    const device = computed(() => records.value[0]?.device ?? '—')
+
+    function llmSec(r) {
+      if (!r.llm_calls || !r.llm_calls.length) return '—'
+      const total = r.llm_calls.reduce((s, c) => s + (c.sec || 0), 0)
+      return total.toFixed(2) + 'с'
+    }
+
+    function llmCallLabel(type) {
+      return { direct_answer: 'Прямой ответ', search_decision: 'Решение → поиск', response_stream: 'Генерация ответа', forced_search: 'Форс-поиск', clarification: 'Уточнение' }[type] || type
+    }
+
+    async function load() {
+      loading.value = true
+      try { records.value = await perfApi.list(100) }
+      catch (e) { if (e !== 'unauthorized') toast('Не удалось загрузить данные') }
+      finally { loading.value = false }
+    }
+
+    watch(autoRefresh, (val) => {
+      if (val) { timer = setInterval(load, 10000) }
+      else { clearInterval(timer); timer = null }
+    })
+
+    onMounted(load)
+    onUnmounted(() => { if (timer) clearInterval(timer) })
+    return { records, loading, selected, autoRefresh, device, load, llmSec, llmCallLabel, fmtDate, trunc }
+  }
+}
+
+// ─── DialogsTab ───────────────────────────────────────────────────────────────
+function fmtDuration(sec) {
+  if (!sec && sec !== 0) return '—'
+  const m = Math.floor(sec / 60), s = sec % 60
+  return m > 0 ? `${m}м ${s}с` : `${s}с`
+}
+
+const DialogsTab = {
+  template: `
+    <div class="tab-content">
+      <div class="toolbar">
+        <h2>Диалоги</h2>
+        <div class="toolbar-actions">
+          <select v-model="filterSource" @change="resetAndLoad">
+            <option value="">Все источники</option>
+            <option value="phone">Телефон</option>
+            <option value="web">Браузер</option>
+          </select>
+          <select v-model="filterStatus" @change="resetAndLoad">
+            <option value="">Все статусы</option>
+            <option value="ok">Ок</option>
+            <option value="disputed">К рассмотрению</option>
+          </select>
+          <button class="btn btn-ghost" @click="load">↻</button>
+        </div>
+      </div>
+      <div class="card">
+        <div v-if="loading" class="loading">Загрузка…</div>
+        <template v-else>
+          <div class="meta-info">Найдено: {{ total }} диалогов</div>
+          <table v-if="items.length">
+            <thead>
+              <tr>
+                <th>Время</th>
+                <th>Источник</th>
+                <th>Длит.</th>
+                <th>Статус</th>
+                <th>Первый вопрос</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="d in items" :key="d.id" style="cursor:pointer" @click="openDialog(d)">
+                <td class="dim">{{ fmtDate(d.started_at) }}</td>
+                <td>
+                  <span v-if="d.source === 'phone'" class="badge badge-running">📞 Телефон</span>
+                  <span v-else class="badge">🌐 Браузер</span>
+                </td>
+                <td class="dim">{{ fmtDuration(d.duration_sec) }}</td>
+                <td>
+                  <span v-if="d.status === 'disputed'" class="badge badge-pending">⚠ К рассмотрению</span>
+                  <span v-else class="badge badge-done">✓ Ок</span>
+                </td>
+                <td class="text-cell">{{ firstQuestion(d.messages) }}</td>
+                <td class="actions" @click.stop>
+                  <button class="btn btn-sm btn-ghost" @click="toggleStatus(d)"
+                    :title="d.status === 'disputed' ? 'Пометить как Ок' : 'Пометить к рассмотрению'">
+                    {{ d.status === 'disputed' ? '✓' : '⚠' }}
+                  </button>
+                  <button class="btn btn-sm btn-danger" @click="remove(d)">✕</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="empty">Диалогов нет.</div>
+          <div v-if="total > limit" class="pagination">
+            <button class="btn btn-ghost btn-sm" :disabled="offset === 0" @click="prevPage">← Назад</button>
+            <span>{{ currentPage }} / {{ totalPages }}</span>
+            <button class="btn btn-ghost btn-sm" :disabled="offset + limit >= total" @click="nextPage">Вперёд →</button>
+          </div>
+        </template>
+      </div>
+
+      <!-- Модалка просмотра диалога -->
+      <div v-if="selected" class="modal-overlay" @click.self="selected = null">
+        <div class="modal" style="width:680px;max-width:96vw">
+          <div class="modal-header">
+            <h3>
+              {{ selected.source === 'phone' ? '📞 Телефон' : '🌐 Браузер' }} —
+              {{ fmtDate(selected.started_at) }}
+              ({{ fmtDuration(selected.duration_sec) }})
+            </h3>
+            <button class="close-btn" @click="selected = null">×</button>
+          </div>
+          <div class="modal-body" style="max-height:65vh;gap:8px">
+            <div v-for="(msg, i) in selected.messages" :key="i"
+              :style="{
+                alignSelf: msg.role === 'user' ? 'flex-start' : 'flex-end',
+                maxWidth: '85%',
+                padding: '9px 13px',
+                borderRadius: '10px',
+                fontSize: '14px',
+                lineHeight: '1.5',
+                background: msg.role === 'user' ? '#f1f5f9' : '#dbeafe',
+                color: msg.role === 'user' ? '#1e293b' : '#1e3a8a',
+              }">
+              <div style="font-size:11px;font-weight:600;margin-bottom:4px;opacity:.6">
+                {{ msg.role === 'user' ? 'Пользователь' : 'Алина' }}
+              </div>
+              {{ msg.content }}
+            </div>
+          </div>
+          <div class="modal-footer">
+            <span v-if="selected.status === 'disputed'" class="badge badge-pending" style="margin-right:auto">⚠ К рассмотрению</span>
+            <span v-else class="badge badge-done" style="margin-right:auto">✓ Ок</span>
+            <button class="btn btn-ghost" @click="selected = null">Закрыть</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const LIMIT = 50
+    const items        = ref([])
+    const loading      = ref(false)
+    const total        = ref(0)
+    const offset       = ref(0)
+    const limit        = LIMIT
+    const filterSource = ref('')
+    const filterStatus = ref('')
+    const selected     = ref(null)
+
+    const currentPage = computed(() => Math.floor(offset.value / limit) + 1)
+    const totalPages  = computed(() => Math.ceil(total.value / limit))
+
+    function firstQuestion(messages) {
+      const m = (messages || []).find(m => m.role === 'user')
+      return m ? trunc(m.content, 80) : '—'
+    }
+
+    async function load() {
+      loading.value = true
+      try {
+        const res = await dialogsApi.list({
+          source: filterSource.value || undefined,
+          status: filterStatus.value || undefined,
+          offset: offset.value, limit,
+        })
+        items.value = res.items; total.value = res.total
+      } catch (e) { if (e !== 'unauthorized') toast('Не удалось загрузить диалоги') }
+      finally { loading.value = false }
+    }
+    function resetAndLoad() { offset.value = 0; load() }
+    function prevPage() { offset.value = Math.max(0, offset.value - limit); load() }
+    function nextPage() { offset.value += limit; load() }
+
+    function openDialog(d) { selected.value = d }
+
+    async function toggleStatus(d) {
+      const next = d.status === 'disputed' ? 'ok' : 'disputed'
+      try {
+        await dialogsApi.setStatus(d.id, next)
+        d.status = next
+        if (selected.value && selected.value.id === d.id) selected.value.status = next
+      } catch (e) { if (e !== 'unauthorized') toast('Не удалось изменить статус') }
+    }
+
+    async function remove(d) {
+      if (!confirm('Удалить диалог?')) return
+      try {
+        await dialogsApi.delete(d.id)
+        toast('Диалог удалён', 'success')
+        if (selected.value && selected.value.id === d.id) selected.value = null
+        await load()
+      } catch (e) { if (e !== 'unauthorized') toast('Не удалось удалить диалог') }
+    }
+
+    onMounted(load)
+    return {
+      items, loading, total, offset, limit, filterSource, filterStatus, selected,
+      currentPage, totalPages,
+      load, resetAndLoad, prevPage, nextPage, openDialog, toggleStatus, remove,
+      firstQuestion, fmtDate, fmtDuration, trunc,
+    }
+  }
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 createApp({
-  components: { LoginPage, FilesTab, ChunksTab, TasksTab, HelpTab, ToastContainer },
+  components: { LoginPage, FilesTab, ChunksTab, TasksTab, HelpTab, SystemTab, DialogsTab, PerfTab, ToastContainer },
   template: `
     <div>
       <ToastContainer />
@@ -789,16 +1286,19 @@ createApp({
           <button class="logout-btn" @click="logout">Выйти</button>
         </header>
         <main>
-          <FilesTab  v-if="cur === 'files'" />
-          <ChunksTab v-else-if="cur === 'chunks'" />
-          <TasksTab  v-else-if="cur === 'tasks'" />
-          <HelpTab   v-else-if="cur === 'help'" />
+          <FilesTab    v-if="cur === 'files'" />
+          <ChunksTab   v-else-if="cur === 'chunks'" />
+          <TasksTab    v-else-if="cur === 'tasks'" />
+          <DialogsTab  v-else-if="cur === 'dialogs'" />
+          <PerfTab     v-else-if="cur === 'perf'" />
+          <HelpTab     v-else-if="cur === 'help'" />
+          <SystemTab   v-else-if="cur === 'system'" />
         </main>
       </div>
     </div>
   `,
   setup() {
-    const tabs     = [{ key:'files', label:'Файлы' }, { key:'chunks', label:'Чанки' }, { key:'tasks', label:'Задачи' }, { key:'help', label:'Справка' }]
+    const tabs     = [{ key:'files', label:'Файлы' }, { key:'chunks', label:'Чанки' }, { key:'tasks', label:'Задачи' }, { key:'dialogs', label:'Диалоги' }, { key:'perf', label:'Производительность' }, { key:'help', label:'Справка' }, { key:'system', label:'Система' }]
     const cur      = ref('files')
     const loggedIn = ref(false)
     const checking = ref(true)

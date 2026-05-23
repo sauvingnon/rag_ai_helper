@@ -63,3 +63,21 @@ export const chunksApi = {
 export const tasksApi = {
   list: () => fetch(`${BASE}/tasks`).then(r => r.json()),
 }
+
+export const aiApi = {
+  reloadDb: () =>
+    fetch(`${BASE}/ai/reload-db`, { method: 'POST' }).then(r => {
+      if (!r.ok) return r.json().then(e => Promise.reject(e.error || 'Ошибка'))
+      return r.json()
+    }),
+}
+
+export const systemApi = {
+  sessionsStats: () => fetch(`${BASE}/sessions/stats`).then(r => r.json()),
+
+  clearSessions: () =>
+    fetch(`${BASE}/sessions/all`, { method: 'DELETE' }).then(r => {
+      if (!r.ok) return r.json().then(e => Promise.reject(e.detail || 'Ошибка'))
+      return r.json()
+    }),
+}

@@ -3,6 +3,7 @@ import logging
 import os
 import tempfile
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -17,8 +18,27 @@ from app.services.tts import load_model, synthesize
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://ai_service:8005")
+AI_SERVICE_URL    = os.getenv("AI_SERVICE_URL",    "http://ai_service:8005")
+ADMIN_SERVICE_URL = os.getenv("ADMIN_SERVICE_URL", "http://admin_service:8020")
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+async def _save_dialog(started_at: str, duration_sec: int, messages: list) -> None:
+    if not messages:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{ADMIN_SERVICE_URL}/internal/dialogs",
+                json={
+                    "source": "web",
+                    "started_at": started_at,
+                    "duration_sec": duration_sec,
+                    "messages": messages,
+                },
+            )
+    except Exception as e:
+        logger.warning("Не удалось сохранить лог диалога: %s", e)
 
 
 @asynccontextmanager
@@ -61,6 +81,9 @@ async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("WebSocket client connected")
     history: list = []
+    dialog_messages: list = []
+    started_at = datetime.now(timezone.utc).isoformat()
+    t_start = datetime.now(timezone.utc).timestamp()
     try:
         while True:
             # Клиент сначала шлёт JSON с историей, затем бинарные данные аудио
@@ -96,6 +119,11 @@ async def ws_endpoint(websocket: WebSocket):
                 answer = data.get("response", "")
                 logger.info("STT: %s | Answer: %s", user_msg, answer[:80])
 
+                if user_msg:
+                    dialog_messages.append({"role": "user",      "content": user_msg})
+                if answer:
+                    dialog_messages.append({"role": "assistant", "content": answer})
+
                 await websocket.send_text(json.dumps({
                     "user_msg": user_msg,
                     "response": answer,
@@ -113,6 +141,9 @@ async def ws_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
+    finally:
+        duration_sec = int(datetime.now(timezone.utc).timestamp() - t_start)
+        await _save_dialog(started_at, duration_sec, dialog_messages)
 
 
 if __name__ == "__main__":

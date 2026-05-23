@@ -20,6 +20,7 @@ import struct
 import uuid
 import wave
 from collections import deque
+from datetime import datetime, timezone
 
 import httpx
 from num2words import num2words
@@ -31,8 +32,27 @@ from app.services.session_store import load_session, save_session
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://ai_service:8005")
-AUDIOSOCKET_PORT = int(os.getenv("AUDIOSOCKET_PORT", 9093))
+AI_SERVICE_URL    = os.getenv("AI_SERVICE_URL",    "http://ai_service:8005")
+ADMIN_SERVICE_URL = os.getenv("ADMIN_SERVICE_URL", "http://admin_service:8020")
+AUDIOSOCKET_PORT  = int(os.getenv("AUDIOSOCKET_PORT", 9093))
+
+
+async def _save_dialog(started_at: str, duration_sec: int, messages: list) -> None:
+    if not messages:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{ADMIN_SERVICE_URL}/internal/dialogs",
+                json={
+                    "source": "phone",
+                    "started_at": started_at,
+                    "duration_sec": duration_sec,
+                    "messages": messages,
+                },
+            )
+    except Exception as e:
+        logger.warning("Не удалось сохранить лог диалога: %s", e)
 
 GREETING_NEW      = "Здравствуйте! Вы позвонили в справочную службу Ижевского Государственного технического Университета имени Михаила Тимофеевича Калашникова. Как я могу к вам обращаться?"
 GREETING_RETURN   = "Здравствуйте, {name}! Рада вас слышать снова. Чем могу помочь?"
@@ -374,6 +394,10 @@ async def handle_call(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     collector = SpeechCollector()
     session = CallSession()
     mute_until: float = 0.0
+    started_at = datetime.now(timezone.utc).isoformat()
+    t_start = asyncio.get_event_loop().time()
+    dialog_messages: list = []   # приветствие + обмен именем
+    new_qa: list = []            # реплики этого звонка
 
     async def drain_echo() -> None:
         nonlocal mute_until
@@ -408,6 +432,7 @@ async def handle_call(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                     greeting = GREETING_RETURN.format(name=session.name)
                 else:
                     greeting = GREETING_NEW
+                dialog_messages.append({"role": "assistant", "content": greeting})
                 await play(synthesize_8k(greeting))
 
             elif msg_type == T_AUDIO:
@@ -426,6 +451,8 @@ async def handle_call(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                             session.name_received = True
                             logger.info("Имя пользователя: %s", name)
                             answer = f"Очень приятно, {name}. Чем могу вам помочь?"
+                            dialog_messages.append({"role": "user",      "content": user_msg})
+                            dialog_messages.append({"role": "assistant", "content": answer})
                         else:
                             answer = ""
                     else:
@@ -436,6 +463,8 @@ async def handle_call(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                         logger.info("Q: %s | A: %s", (user_msg or "")[:60], (answer or "")[:60])
                         if answer and user_msg:
                             session.add_turn(user_msg, answer)
+                            new_qa.append({"role": "user",      "content": user_msg})
+                            new_qa.append({"role": "assistant", "content": answer})
 
                         if barge_in:
                             barge_text = await transcribe_only(pcm_to_wav(barge_in))
@@ -451,6 +480,8 @@ async def handle_call(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                                 await drain_echo()
                                 if user_msg2 and answer2:
                                     session.add_turn(user_msg2, answer2)
+                                    new_qa.append({"role": "user",      "content": user_msg2})
+                                    new_qa.append({"role": "assistant", "content": answer2})
 
                         continue  # answer уже сыгран потоком, пропускаем play ниже
 
@@ -468,6 +499,8 @@ async def handle_call(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError, OSError):
         logger.info("Connection lost from %s", addr)
     finally:
+        duration_sec = int(asyncio.get_event_loop().time() - t_start)
+        await _save_dialog(started_at, duration_sec, dialog_messages + new_qa)
         try:
             writer.close()
         except Exception:

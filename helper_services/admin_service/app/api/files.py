@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import Response
@@ -68,7 +69,7 @@ async def download_file(file_id: str):
     return Response(
         content=data,
         media_type=meta["content_type"],
-        headers={"Content-Disposition": f'attachment; filename="{meta["filename"]}"'},
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(meta['filename'])}"},
     )
 
 
@@ -82,7 +83,7 @@ async def view_file(file_id: str):
     return Response(
         content=data,
         media_type=meta["content_type"],
-        headers={"Content-Disposition": f'inline; filename="{meta["filename"]}"'},
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(meta['filename'])}"},
     )
 
 

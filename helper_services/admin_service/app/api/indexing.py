@@ -25,6 +25,19 @@ async def trigger_index(file_id: str, background_tasks: BackgroundTasks):
     return {"task_id": task_id}
 
 
+@router.post("/files/reindex-all", status_code=202)
+async def reindex_all(background_tasks: BackgroundTasks):
+    if _s3 is None:
+        raise HTTPException(status_code=503, detail="S3 не инициализирован")
+    files = await _s3.list_files()
+    if not files:
+        return {"started": 0}
+    for f in files:
+        task_id = create_task(f["file_id"], f["filename"])
+        background_tasks.add_task(index_file, task_id, f["file_id"], _s3)
+    return {"started": len(files)}
+
+
 @router.get("/tasks")
 async def list_all_tasks():
     return list_tasks()

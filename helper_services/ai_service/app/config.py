@@ -10,7 +10,6 @@ RERANK_TOP = int(os.getenv("RERANK_TOP"))
 SBERT_MODEL_PATH = os.getenv("SBERT_MODEL_PATH")
 CROSS_ENCODER_MODEL_PATH = os.getenv("CROSS_ENCODER_MODEL_PATH")
 TOP_K = int(os.getenv("TOP_K"))
-SENTRY_KEY = os.getenv("SENTRY_KEY")
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")

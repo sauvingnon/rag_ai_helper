@@ -13,7 +13,9 @@ async def voice_handler(file: UploadFile, history: list = None, user_name: str =
         bio = io.BytesIO(audio_bytes)
         bio.name = "voice.wav"
 
+        t_stt0 = __import__("time").monotonic()
         user_msg = await ai_voice_reqest(file=bio)
+        stt_sec = __import__("time").monotonic() - t_stt0
 
         if not user_msg or not user_msg.strip():
             logger.info("STT вернул пустой текст — пропускаем")
@@ -22,7 +24,7 @@ async def voice_handler(file: UploadFile, history: list = None, user_name: str =
         logger.info("Голосовое сообщение: %s", user_msg[:80])
 
         sentences = []
-        async for sentence in ai_agent_stream(user_msg, history=history or [], user_name=user_name):
+        async for sentence in ai_agent_stream(user_msg, history=history or [], user_name=user_name, stt_sec=stt_sec):
             sentences.append(sentence)
 
         response = " ".join(sentences)
@@ -56,13 +58,15 @@ async def voice_handler_stream(file: UploadFile, history: list = None, user_name
     bio = io.BytesIO(audio_bytes)
     bio.name = "voice.wav"
 
+    t_stt0 = __import__("time").monotonic()
     user_msg = await ai_voice_reqest(file=bio)
+    stt_sec = __import__("time").monotonic() - t_stt0
     if not user_msg or not user_msg.strip():
         return
 
     logger.info("STT: %s", user_msg[:80])
 
     first = True
-    async for sentence in ai_agent_stream(user_msg, history=history or [], user_name=user_name):
+    async for sentence in ai_agent_stream(user_msg, history=history or [], user_name=user_name, stt_sec=stt_sec):
         yield (user_msg if first else ""), sentence
         first = False

@@ -10,8 +10,23 @@
           </option>
         </select>
         <button class="btn btn-ghost" @click="load">↻</button>
+        <button
+          class="btn btn-warning"
+          :disabled="reloadStatus === 'loading'"
+          @click="reloadAiDb"
+        >
+          {{ reloadStatus === 'loading' ? 'Обновление…' : '⟳ Реиндексировать БД' }}
+        </button>
       </div>
     </div>
+
+    <div v-if="needsReload && reloadStatus !== 'ok'" class="alert alert-warning">
+      ⚠ Чанки изменены — база знаний ИИ устарела. Нажмите «Реиндексировать БД» чтобы применить изменения.
+    </div>
+    <div v-if="reloadStatus === 'ok'" class="alert alert-success">
+      ✓ База знаний ИИ обновлена.
+    </div>
+    <div v-if="reloadStatus === 'error'" class="alert alert-error">Ошибка реиндексации — проверьте что ai_service запущен.</div>
 
     <div v-if="error" class="alert alert-error">{{ error }}</div>
 
@@ -95,7 +110,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { chunksApi, filesApi } from '../api.js'
+import { chunksApi, filesApi, aiApi } from '../api.js'
 
 const LIMIT = 50
 
@@ -112,6 +127,9 @@ const editChunk  = ref(null)
 const editForm   = ref({})
 const saving     = ref(false)
 const saveError  = ref('')
+
+const needsReload  = ref(false)
+const reloadStatus = ref('idle') // 'idle' | 'loading' | 'ok' | 'error'
 
 const currentPage = computed(() => Math.floor(offset.value / limit) + 1)
 const totalPages  = computed(() => Math.ceil(total.value / limit))
@@ -161,6 +179,8 @@ async function saveEdit() {
   try {
     await chunksApi.update(editChunk.value.id, editForm.value)
     editChunk.value = null
+    needsReload.value = true
+    reloadStatus.value = 'idle'
     await load()
   } catch (msg) {
     saveError.value = typeof msg === 'string' ? msg : 'Ошибка сохранения'
@@ -174,9 +194,23 @@ async function remove(id) {
   error.value = ''
   try {
     await chunksApi.delete(id)
+    needsReload.value = true
+    reloadStatus.value = 'idle'
     await load()
   } catch {
     error.value = 'Ошибка удаления чанка'
+  }
+}
+
+async function reloadAiDb() {
+  reloadStatus.value = 'loading'
+  try {
+    await aiApi.reloadDb()
+    needsReload.value = false
+    reloadStatus.value = 'ok'
+    setTimeout(() => { reloadStatus.value = 'idle' }, 3000)
+  } catch {
+    reloadStatus.value = 'error'
   }
 }
 

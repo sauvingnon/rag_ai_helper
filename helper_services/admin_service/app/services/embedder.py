@@ -1,26 +1,26 @@
 from __future__ import annotations
 
-from chromadb import EmbeddingFunction, Documents, Embeddings
-from sentence_transformers import SentenceTransformer
+import os
 
-from app.config import SBERT_MODEL_PATH
+import httpx
+from chromadb import EmbeddingFunction, Documents, Embeddings
+
 from app.logger import logger
 
-_model: SentenceTransformer | None = None
-
-
-def get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        logger.info("Загрузка SBERT: %s", SBERT_MODEL_PATH)
-        _model = SentenceTransformer(SBERT_MODEL_PATH)
-        logger.info("SBERT готов")
-    return _model
+AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://ai_service:8005")
 
 
 class LocalEmbeddingFunction(EmbeddingFunction):
     def __call__(self, input: Documents) -> Embeddings:
-        return get_model().encode(list(input)).tolist()
+        texts = list(input)
+        logger.info("Запрос эмбеддингов у ai_service: %d текстов", len(texts))
+        resp = httpx.post(
+            f"{AI_SERVICE_URL}/ai_service/embed",
+            json={"texts": texts},
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["embeddings"]
 
 
 _fn: LocalEmbeddingFunction | None = None

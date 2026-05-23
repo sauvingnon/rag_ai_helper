@@ -1,11 +1,25 @@
 import uuid as _uuid
+import os
 
-from fastapi import APIRouter, HTTPException, Query
+import httpx
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services.chroma_client import get_collection
+from app.logger import logger
 
 router = APIRouter(prefix="/chunks", tags=["chunks"])
+
+_AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://ai_service:8005")
+
+
+async def _notify_ai_reload() -> None:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(f"{_AI_SERVICE_URL}/reload-db")
+        logger.info("ai_service: ChromaDB перезагружена после изменения чанка")
+    except Exception as e:
+        logger.warning("Не удалось уведомить ai_service: %s", e)
 
 
 class ChunkCreate(BaseModel):
@@ -52,7 +66,7 @@ async def chunk_stats():
 
 
 @router.post("", status_code=201)
-async def create_chunk(body: ChunkCreate):
+async def create_chunk(body: ChunkCreate, background_tasks: BackgroundTasks):
     collection = get_collection()
     chunk_id = str(_uuid.uuid4())
     meta = {
@@ -66,6 +80,7 @@ async def create_chunk(body: ChunkCreate):
     }
     doc = _build_doc(meta)
     collection.add(ids=[chunk_id], documents=[doc], metadatas=[meta])
+    background_tasks.add_task(_notify_ai_reload)
     return {"id": chunk_id, "document": doc, **meta}
 
 
@@ -118,7 +133,7 @@ async def get_chunk(chunk_id: str):
 
 
 @router.put("/{chunk_id}")
-async def update_chunk(chunk_id: str, body: ChunkUpdate):
+async def update_chunk(chunk_id: str, body: ChunkUpdate, background_tasks: BackgroundTasks):
     collection = get_collection()
     existing = collection.get(ids=[chunk_id], include=["metadatas"])
     if not existing["ids"]:
@@ -127,12 +142,14 @@ async def update_chunk(chunk_id: str, body: ChunkUpdate):
     meta = {**existing["metadatas"][0], **body.model_dump(exclude_none=True)}
     new_doc = _build_doc(meta)
     collection.update(ids=[chunk_id], documents=[new_doc], metadatas=[meta])
+    background_tasks.add_task(_notify_ai_reload)
     return {"id": chunk_id, "document": new_doc, **meta}
 
 
 @router.delete("/{chunk_id}", status_code=204)
-async def delete_chunk(chunk_id: str):
+async def delete_chunk(chunk_id: str, background_tasks: BackgroundTasks):
     collection = get_collection()
     if not collection.get(ids=[chunk_id])["ids"]:
         raise HTTPException(status_code=404, detail="Чанк не найден")
     collection.delete(ids=[chunk_id])
+    background_tasks.add_task(_notify_ai_reload)

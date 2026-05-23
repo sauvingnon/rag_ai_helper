@@ -22,3 +22,5 @@ JWT_SECRET       = os.getenv("JWT_SECRET",     "change-this-secret")
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
 
 ALLOWED_EXTENSIONS = {".yaml", ".yml", ".txt", ".pdf", ".docx"}
+
+AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://ai_service:8005")

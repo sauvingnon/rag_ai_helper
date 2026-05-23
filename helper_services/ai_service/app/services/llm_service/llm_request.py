@@ -5,6 +5,7 @@ import os
 import re
 import json
 import time
+from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 from openai import AsyncOpenAI
@@ -14,98 +15,74 @@ from app.logger import logger
 
 # ─── Агент ───────────────────────────────────────────────────────────────────
 
-AGENT_SYSTEM = """ВАЖНО: Отвечай ТОЛЬКО на русском языке. Никогда не используй другие языки.
+AGENT_SYSTEM = """ВАЖНО: Отвечай ТОЛЬКО на русском языке.
 
-Тебя зовут Алина. Ты женщина-ассистент справочной службы университета. Общаешься по телефону.
+Тебя зовут Алина. Ты женщина-ассистент справочной службы ИжГТУ. Общаешься по телефону.
 Говори о себе в женском роде: "нашла", "не смогла найти", "рада помочь" и т.д.
 
-У тебя два инструмента:
+Ты ВСЕГДА обязана вызвать один из двух инструментов. Свободный текст запрещён.
 
-1. search_knowledge_base — ищет информацию в базе знаний. Вызывай при любом конкретном вопросе об университете: факультеты, специальности, приёмная комиссия, расписание, контакты, стоимость обучения, общежитие, преподаватели, корпуса и т.д. Можно вызвать повторно с уточнённым запросом если первый результат недостаточен (максимум 2 раза за ход).
+search_knowledge_base — вызывай при любом вопросе об университете: факультеты, специальности, поступление, преподаватели, расписание, стоимость, общежитие, контакты, корпуса, стипендии и т.д. Если тема хоть как-то может касаться университета или обучения — ищи. Можно вызвать дважды с разными запросами.
 
-2. ask_clarification — задаёт уточняющий вопрос пользователю. Используй ТОЛЬКО если запрос совершенно неразборчив или настолько общий, что невозможно понять что искать (например: "расскажи про всё", "что у вас есть", несвязная речь). Если вопрос хоть как-то понятен — сразу ищи, не уточняй.
+respond_directly — отвечай без поиска ТОЛЬКО в трёх случаях:
+  1. Приветствие или завершение разговора
+  2. Вопрос точно не связан с университетом (написать код, дать рецепт, решить математическую задачу без контекста университета)
+  3. Запрос совершенно непонятен — задай один уточняющий вопрос
 
 ЗАПРЕЩЕНО:
-- упоминать названия инструментов или функций в ответе пользователю
-- обещать перезвонить, отправить информацию позже, передать заявку
-- придумывать факты об университете из головы
-- говорить "уточню", "проверю", "найду" — либо ищи прямо сейчас, либо скажи что не знаешь
+- придумывать факты об университете без поиска в базе знаний
+- обещать перезвонить, передать заявку, отправить информацию позже
+- упоминать названия инструментов в тексте ответа
 
-ОБЪЁМ ОТВЕТА:
-- Короткий вопрос (что, где, когда, телефон) — 1-2 предложения
-- Если просят рассказать, объяснить, перечислить — до 10 предложений
-
-Язык: только русский."""
+Объём: 1-2 предложения на конкретный вопрос, до 10 предложений если просят объяснить."""
 
 TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "ask_clarification",
-            "description": (
-                "Задать уточняющий вопрос пользователю. "
-                "Использовать ТОЛЬКО если запрос совершенно непонятен и поиск заведомо не поможет. "
-                "Если запрос хоть как-то понятен — вместо этого вызывать search_knowledge_base."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question": {
-                        "type": "string",
-                        "description": "Короткий уточняющий вопрос (одно предложение)"
-                    }
-                },
-                "required": ["question"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "search_knowledge_base",
             "description": (
-                "Поиск информации в базе знаний университета. "
-                "Вызывать при любом конкретном вопросе об университете. "
-                "Можно вызвать повторно с уточнённым запросом если первый результат неполный (макс. 2 раза)."
+                "Поиск информации в базе знаний ИжГТУ. "
+                "Вызывать при любом вопросе об университете. "
+                "Можно вызвать дважды с разными запросами."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Поисковый запрос — что именно нужно найти"
+                        "description": "Поисковый запрос"
                     }
                 },
                 "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "respond_directly",
+            "description": (
+                "Дать ответ без поиска в базе знаний. "
+                "Только для: 1) приветствий и прощаний, "
+                "2) явно нерелевантных вопросов (код, рецепты, общая математика), "
+                "3) уточняющего вопроса когда запрос совершенно непонятен."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Полный текст ответа или уточняющего вопроса"
+                    }
+                },
+                "required": ["text"]
             }
         }
     }
 ]
 
 _SENT_END = re.compile(r'(?<=[.!?…])\s')
-
-
-
-_FORCE_SEARCH_MARKERS = [
-    "search_knowledge_base",
-    "ask_clarification",
-    "минуточку, ищу",
-    "почти нашла",
-    "перезвон",
-    "позвоню",
-    "свяжусь",
-    "найду информацию",
-    "уточню информацию",
-    "обращусь",
-    "передам",
-    "проверю",
-    "посмотрю",
-    "позвольте я",
-    "дайте мне",
-    "сейчас узнаю",
-    "сейчас проверю",
-    "сейчас посмотрю",
-]
 
 MAX_SEARCHES = 2
 
@@ -161,20 +138,30 @@ async def _stream_sentences(stream) -> AsyncGenerator[str, None]:
         yield buffer.strip()
 
 
-def _execute_search(query: str) -> str:
+def _execute_search(query: str) -> tuple[str, dict]:
+    """Возвращает (текст результата, тайминги)."""
     from app.services.embeddings_service.search_pipeline import search, rerank  # noqa: PLC0415
     t0 = time.monotonic()
     chunks = search(query=query)
     t1 = time.monotonic()
     if not chunks:
         logger.info("[search] %.2f с — ничего не найдено", t1 - t0)
-        return "Информация по запросу не найдена."
+        return "Информация по запросу не найдена.", {
+            "search_sec": round(t1 - t0, 3), "rerank_sec": 0,
+            "chunks_in": 0, "chunks_out": 0,
+        }
     top = rerank(query, chunks)
     t2 = time.monotonic()
     logger.info("[search] %.2f с  [rerank] %.2f с  chunks: %d → %d",
                 t1 - t0, t2 - t1, len(chunks), len(top) if top else 0)
+    timing = {
+        "search_sec": round(t1 - t0, 3),
+        "rerank_sec": round(t2 - t1, 3),
+        "chunks_in": len(chunks),
+        "chunks_out": len(top) if top else 0,
+    }
     if top is None:
-        return "Релевантной информации не найдено."
+        return "Релевантной информации не найдено.", timing
     lines = []
     for i, ch in enumerate(top, 1):
         name = ch.get("name", "")
@@ -182,13 +169,14 @@ def _execute_search(query: str) -> str:
         lines.append(f"[{i}] {name}\n{text.strip()}")
         if ch.get("notes"):
             lines.append(f"    Примечание: {ch['notes'].strip()}")
-    return "\n".join(lines)
+    return "\n".join(lines), timing
 
 
 async def ai_agent_stream(
     user_message: str,
     history: list = None,
     user_name: str = "",
+    stt_sec: float | None = None,
 ) -> AsyncGenerator[str, None]:
     """Agentic RAG loop.
 
@@ -200,6 +188,19 @@ async def ai_agent_stream(
     """
     t_start = time.monotonic()
     loop = asyncio.get_event_loop()
+
+    import torch
+    _device = "cuda" if torch.cuda.is_available() else "cpu"
+    _perf: dict = {
+        "ts":          datetime.now(timezone.utc).isoformat(),
+        "query":       user_message[:300],
+        "stt_sec":     round(stt_sec, 3) if stt_sec is not None else None,
+        "device":      _device,
+        "searches":    [],
+        "llm_calls":   [],
+        "search_count": 0,
+        "total_sec":   0.0,
+    }
 
     system = AGENT_SYSTEM
     if user_name:
@@ -214,65 +215,29 @@ async def ai_agent_stream(
 
     try:
         while True:
+            t_llm0 = time.monotonic()
             response = await client.chat.completions.create(
                 model=LLM_MODEL,
                 messages=messages,
                 tools=TOOLS,
-                tool_choice="auto",
+                tool_choice="required",  # LLM обязана вызвать инструмент, свободный текст запрещён
                 stream=False,
             )
-            t_call = time.monotonic()
+            t_llm1 = time.monotonic()
+            llm_sec = round(t_llm1 - t_llm0, 3)
             msg = response.choices[0].message
 
-            # ── Нет tool_call → финальный ответ ──────────────────────────────
+            # Страховка: модель не вернула tool_call несмотря на tool_choice="required"
             if not msg.tool_calls:
-                content = msg.content or ""
-                logger.info("[llm] %.2f с → прямой ответ: «%s»", t_call - t_start, content[:120])
-
-                force_search = (
-                    not content.strip()
-                    or any(m in content.lower() for m in _FORCE_SEARCH_MARKERS)
-                ) and search_count < MAX_SEARCHES
-
-                if force_search:
-                    reason = "пустой ответ" if not content.strip() else "маркер галлюцинации"
-                    logger.warning("[llm] %s — форсируем поиск", reason)
-                    yield random.choice(_SEARCH_PHRASES_1)
-                    t_s = time.monotonic()
-                    result = await loop.run_in_executor(None, _execute_search, user_message)
-                    logger.info("[search] форс %.2f с", time.monotonic() - t_s)
-                    search_count += 1
-                    messages.append({"role": "assistant", "content": ""})
-                    messages.append({
-                        "role": "user",
-                        "content": f"Используй эту информацию для ответа на вопрос:\n{result}\n\nВопрос: {user_message}"
-                    })
-                    continue
-
-                if search_count > 0:
-                    # После поиска: stream=True для минимальной задержки до первого аудио
-                    t_llm = time.monotonic()
-                    stream = await client.chat.completions.create(
-                        model=LLM_MODEL, messages=messages, stream=True
-                    )
-                    first = True
-                    async for sentence in _stream_sentences(stream):
-                        if first:
-                            logger.info("[llm] первый токен %.2f с от старта", time.monotonic() - t_start)
-                            first = False
-                        yield sentence
-                else:
-                    # Прямой ответ без поиска: контент уже есть, делим на предложения
-                    if content:
-                        for sentence in _split_sentences(content):
-                            yield sentence
-                    else:
-                        yield "Извини, не смогла найти информацию по вашему вопросу."
+                logger.warning("[llm] нет tool_call при tool_choice=required")
+                content = msg.content or "Извини, не смогла обработать запрос."
+                _perf["llm_calls"].append({"type": "fallback_no_tool", "sec": llm_sec})
+                for sentence in _split_sentences(content):
+                    yield sentence
                 break
 
-            # ── Tool call ─────────────────────────────────────────────────────
             tc = msg.tool_calls[0]
-            logger.info("[llm] %.2f с → %s", t_call - t_start, tc.function.name)
+            logger.info("[llm] %.2f с → %s", t_llm1 - t_start, tc.function.name)
 
             messages.append({
                 "role": "assistant",
@@ -284,29 +249,44 @@ async def ai_agent_stream(
                 }]
             })
 
-            # ── ask_clarification ─────────────────────────────────────────────
-            if tc.function.name == "ask_clarification":
+            # ── respond_directly: LLM положила ответ в аргумент инструмента ──
+            if tc.function.name == "respond_directly":
                 try:
-                    question = json.loads(tc.function.arguments).get("question", "")
+                    text = json.loads(tc.function.arguments).get("text", "")
                 except Exception:
-                    question = "Уточните, пожалуйста, ваш вопрос."
-                logger.info("[llm] уточнение: «%s»", question[:80])
-                yield question
-                break  # ждём ответа пользователя в следующем туре
+                    text = ""
+                if not text:
+                    text = "Извини, не смогла сформулировать ответ."
+                call_type = "direct_answer" if search_count == 0 else "respond_after_search"
+                _perf["llm_calls"].append({"type": call_type, "sec": llm_sec})
+                logger.info("[llm] %.2f с → %s: «%s»", t_llm1 - t_start, call_type, text[:120])
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": "ok"})
+                for sentence in _split_sentences(text):
+                    yield sentence
+                break
 
             # ── search_knowledge_base ─────────────────────────────────────────
             if tc.function.name == "search_knowledge_base":
+                _perf["llm_calls"].append({"type": "search_decision", "sec": llm_sec})
+
                 if search_count >= MAX_SEARCHES:
-                    # Лимит исчерпан — форсируем финальный стрим без tool_choice
-                    logger.warning("[llm] лимит поисков, форсируем финальный ответ")
+                    logger.warning("[llm] лимит поисков — форсируем respond_directly")
                     messages.append({
                         "role": "tool", "tool_call_id": tc.id,
                         "content": "Лимит поисков исчерпан. Ответь на основе уже найденной информации."
                     })
-                    stream = await client.chat.completions.create(
-                        model=LLM_MODEL, messages=messages, stream=True
+                    t_s = time.monotonic()
+                    final_resp = await client.chat.completions.create(
+                        model=LLM_MODEL, messages=messages, tools=TOOLS,
+                        tool_choice={"type": "function", "function": {"name": "respond_directly"}},
+                        stream=False,
                     )
-                    async for sentence in _stream_sentences(stream):
+                    _perf["llm_calls"].append({"type": "forced_respond", "sec": round(time.monotonic() - t_s, 3)})
+                    try:
+                        text = json.loads(final_resp.choices[0].message.tool_calls[0].function.arguments).get("text", "")
+                    except Exception:
+                        text = "Извини, не нашла нужной информации."
+                    for sentence in _split_sentences(text):
                         yield sentence
                     break
 
@@ -317,20 +297,24 @@ async def ai_agent_stream(
 
                 search_count += 1
                 logger.info("[search] #%d запрос: «%s»", search_count, query[:60])
-
                 yield random.choice(_SEARCH_PHRASES_1 if search_count == 1 else _SEARCH_PHRASES_2)
 
                 t_s = time.monotonic()
-                result = await loop.run_in_executor(None, _execute_search, query)
+                result, timing = await loop.run_in_executor(None, _execute_search, query)
+                timing["query"] = query[:200]
+                timing["forced"] = False
+                _perf["searches"].append(timing)
                 logger.info("[search] #%d итого %.2f с", search_count, time.monotonic() - t_s)
 
-                messages.append({
-                    "role": "tool", "tool_call_id": tc.id, "content": result
-                })
-                # Продолжаем loop: LLM решает ответить или поискать ещё
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+                # Продолжаем: LLM выберет respond_directly или второй search
                 continue
 
-        logger.info("[agent] цикл завершён %.2f с, поисков: %d", time.monotonic() - t_start, search_count)
+        _perf["total_sec"] = round(time.monotonic() - t_start, 3)
+        _perf["search_count"] = search_count
+        logger.info("[agent] цикл завершён %.2f с, поисков: %d", _perf["total_sec"], search_count)
+        from app.services.perf_store import push as _push_perf
+        _push_perf(_perf)
 
     except Exception as e:
         logger.exception("Ошибка агента: %s", e)
