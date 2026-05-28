@@ -18,13 +18,15 @@ _NO_ANSWER = [
 
 def _conn():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(DB_PATH))
+    con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     con.row_factory = sqlite3.Row
     return con
 
 
 def init_db():
     with _conn() as con:
+        # WAL mode — безопасный конкурентный доступ от нескольких процессов
+        con.execute("PRAGMA journal_mode=WAL")
         con.execute("""
             CREATE TABLE IF NOT EXISTS dialogs (
                 id           TEXT PRIMARY KEY,
@@ -33,6 +35,15 @@ def init_db():
                 duration_sec INTEGER NOT NULL,
                 messages     TEXT NOT NULL,
                 status       TEXT NOT NULL DEFAULT 'ok'
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id    TEXT PRIMARY KEY,
+                name          TEXT NOT NULL DEFAULT '',
+                name_received INTEGER NOT NULL DEFAULT 0,
+                history       TEXT NOT NULL DEFAULT '[]',
+                updated_at    TEXT NOT NULL
             )
         """)
 
@@ -98,3 +109,15 @@ def delete_dialog(dialog_id: str) -> bool:
 def set_status(dialog_id: str, status: str) -> bool:
     with _conn() as con:
         return con.execute("UPDATE dialogs SET status = ? WHERE id = ?", (status, dialog_id)).rowcount > 0
+
+
+# --- Sessions ---
+
+def count_sessions() -> int:
+    with _conn() as con:
+        return con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+
+
+def clear_sessions() -> int:
+    with _conn() as con:
+        return con.execute("DELETE FROM sessions").rowcount

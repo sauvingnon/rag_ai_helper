@@ -15,6 +15,17 @@ router = APIRouter(
 async def message_req(request: AIRequest):
     return await general_handler(request=request)
 
+@router.post("/chat/stream")
+async def chat_stream_req(request: AIRequest):
+    from app.services.llm_service.llm_request import ai_agent_stream
+    from fastapi.responses import StreamingResponse
+
+    async def generate():
+        async for sentence in ai_agent_stream(request.message, history=request.history):
+            yield json.dumps({"token": sentence}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
 @router.post("/voice")
 async def voice_req(
     file: UploadFile = File(...),
@@ -29,11 +40,12 @@ async def voice_stream_req(
     file: UploadFile = File(...),
     history: str = Form(default="[]"),
     user_name: str = Form(default=""),
+    user_text: str = Form(default=""),
 ):
     history_parsed = json.loads(history)
 
     async def generate():
-        async for user_msg, sentence in voice_handler_stream(file, history_parsed, user_name):
+        async for user_msg, sentence in voice_handler_stream(file, history_parsed, user_name, user_text):
             yield json.dumps({"user_msg": user_msg, "sentence": sentence}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")

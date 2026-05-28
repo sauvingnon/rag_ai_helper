@@ -57,7 +57,6 @@ def eval_query(body: EvalQueryRequest):
             "filtered_by_threshold": True,
         }
 
-    # ── Cross-Encoder rerank ──────────────────────────────────────────────────
     full_chunks = []
     for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
         full_chunks.append({
@@ -66,20 +65,29 @@ def eval_query(body: EvalQueryRequest):
             "text": meta.get("text", ""),
         })
 
-    t1 = time.monotonic()
-    pairs = [(query, ch["document"]) for ch in full_chunks]
-    scores = cross_encoder.predict(pairs).tolist()
-    rerank_time = time.monotonic() - t1
+    if cross_encoder is not None:
+        # ── Cross-Encoder rerank ──────────────────────────────────────────────
+        t1 = time.monotonic()
+        pairs = [(query, ch["document"]) for ch in full_chunks]
+        scores = cross_encoder.predict(pairs).tolist()
+        rerank_time = time.monotonic() - t1
 
-    scored = sorted(zip(scores, full_chunks), key=lambda x: x[0], reverse=True)
-    best_score = scored[0][0] if scored else -999.0
-    filtered = best_score < RERANK_THRESHOLD
+        scored = sorted(zip(scores, full_chunks), key=lambda x: x[0], reverse=True)
+        best_score = scored[0][0] if scored else -999.0
+        filtered = best_score < RERANK_THRESHOLD
 
-    reranked = []
-    rerank_scores = []
-    for s, ch in scored[:RERANK_TOP]:
-        reranked.append({"name": ch.get("name", ""), "document": ch["document"][:300]})
-        rerank_scores.append(round(float(s), 4))
+        reranked = []
+        rerank_scores = []
+        for s, ch in scored[:RERANK_TOP]:
+            reranked.append({"name": ch.get("name", ""), "document": ch["document"][:300]})
+            rerank_scores.append(round(float(s), 4))
+    else:
+        # ── SBERT-only (USE_CROSS_ENCODER=false) ─────────────────────────────
+        rerank_time = 0.0
+        best_score = None
+        filtered = False
+        reranked = [{"name": ch["name"], "document": ch["document"][:300]} for ch in full_chunks[:RERANK_TOP]]
+        rerank_scores = []
 
     return {
         "search_time": round(search_time, 4),
@@ -87,7 +95,7 @@ def eval_query(body: EvalQueryRequest):
         "raw_chunks": raw_chunks,
         "reranked_chunks": reranked,
         "rerank_scores": rerank_scores,
-        "best_score": round(float(best_score), 4),
+        "best_score": round(float(best_score), 4) if best_score is not None else None,
         "filtered_by_threshold": filtered,
     }
 
@@ -107,7 +115,7 @@ async def eval_full(body: EvalFullRequest):
     search_log: list[dict] = []
     original = llm_mod._execute_search
 
-    def _instrumented_search(query: str) -> str:
+    def _instrumented_search(query: str) -> tuple[str, dict]:
         # SBERT
         t0 = time.monotonic()
         chunks = _sbert_search(query=query)
@@ -117,34 +125,54 @@ async def eval_full(body: EvalFullRequest):
             search_log.append({
                 "query": query, "search_ms": round(search_ms, 1),
                 "rerank_ms": 0, "best_score": None,
-                "filtered": True, "top_chunk": None, "top_scores": [],
+                "filtered": True, "top_chunk": None, "top_scores": [], "top_chunks": [],
             })
-            return "Информация по запросу не найдена."
+            timing = {"search_sec": round(search_ms / 1000, 3), "rerank_sec": 0, "chunks_in": 0, "chunks_out": 0}
+            return "Информация по запросу не найдена.", timing
 
-        # Cross-Encoder
+        # Cross-Encoder (если включён)
         t1 = time.monotonic()
-        pairs = [(query, ch["document"]) for ch in chunks]
-        scores = cross_encoder.predict(pairs).tolist()
-        rerank_ms = (time.monotonic() - t1) * 1000
+        if cross_encoder is not None:
+            pairs = [(query, ch["document"]) for ch in chunks]
+            scores = cross_encoder.predict(pairs).tolist()
+            rerank_ms = (time.monotonic() - t1) * 1000
 
-        scored = sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)
-        best_score = scored[0][0] if scored else -999.0
-        filtered = best_score < RERANK_THRESHOLD
-        top = [ch for _, ch in scored[:RERANK_TOP]] if not filtered else None
+            scored = sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)
+            best_score = scored[0][0] if scored else -999.0
+            filtered = best_score < RERANK_THRESHOLD
+            top = [ch for _, ch in scored[:RERANK_TOP]] if not filtered else None
+            top_chunks_names = [ch.get("name", "") for _, ch in scored[:RERANK_TOP]]
+            top_scores = [round(float(s), 4) for s, _ in scored[:RERANK_TOP]]
+            top_chunk_name = scored[0][1].get("name", "") if scored else None
+        else:
+            rerank_ms = 0.0
+            top = chunks[:RERANK_TOP]
+            best_score = None
+            filtered = False
+            top_chunks_names = [ch.get("name", "") for ch in top]
+            top_scores = []
+            top_chunk_name = top[0].get("name", "") if top else None
 
         search_log.append({
             "query": query,
             "search_ms": round(search_ms, 1),
             "rerank_ms": round(rerank_ms, 1),
-            "best_score": round(float(best_score), 4),
+            "best_score": round(float(best_score), 4) if best_score is not None else None,
             "filtered": filtered,
-            "top_chunk": scored[0][1].get("name", "") if scored else None,
-            "top_chunks": [ch.get("name", "") for _, ch in scored[:RERANK_TOP]],
-            "top_scores": [round(float(s), 4) for s, _ in scored[:RERANK_TOP]],
+            "top_chunk": top_chunk_name,
+            "top_chunks": top_chunks_names,
+            "top_scores": top_scores,
         })
 
+        timing = {
+            "search_sec": round(search_ms / 1000, 3),
+            "rerank_sec": round(rerank_ms / 1000, 3),
+            "chunks_in": len(chunks),
+            "chunks_out": len(top) if top else 0,
+        }
+
         if top is None:
-            return "Релевантной информации не найдено."
+            return "Релевантной информации не найдено.", timing
 
         lines = []
         for i, ch in enumerate(top, 1):
@@ -153,7 +181,7 @@ async def eval_full(body: EvalFullRequest):
             lines.append(f"[{i}] {name}\n{text.strip()}")
             if ch.get("notes"):
                 lines.append(f"    Примечание: {ch['notes'].strip()}")
-        return "\n".join(lines)
+        return "\n".join(lines), timing
 
     llm_mod._execute_search = _instrumented_search
     t_start = time.monotonic()

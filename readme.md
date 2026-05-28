@@ -78,23 +78,31 @@
 
 Логика: SBERT быстро отсеивает кандидатов (ANN по всей базе), Cross-Encoder точно оценивает только их. Связка даёт баланс скорости и качества.
 
+**GPU-ускорение**
+
+SBERT, Cross-Encoder и Whisper автоматически переходят на CUDA если доступна GPU (`torch.cuda.is_available()`). Fallback — CPU + int8. Для Whisper на Pascal GTX 10xx автоматически выбирается int8 (float16 не поддерживается архитектурой). В docker-compose — NVIDIA GPU passthrough для `ai_service`. При остановке контейнера CUDA-память явно освобождается (`torch.cuda.empty_cache()`) — иначе ctranslate2/PyTorch виснут.
+
 **Agentic RAG — LLM сам решает что делать**
 
-LLM-агент получает два инструмента:
+LLM-агент работает в режиме `tool_choice="required"` — свободный текст без вызова инструмента запрещён. Доступны два инструмента:
 - `search_knowledge_base(query)` — вызывает RAG-пайплайн. До 2 раз за ход с разными формулировками.
-- `ask_clarification(question)` — уточняющий вопрос, только если запрос совершенно непонятен.
+- `respond_directly(text)` — отвечает без поиска. Используется для приветствий, общеизвестных фактов и уточняющих вопросов.
 
 Паттерны в реальных звонках:
-- `"когда основан университет?"` → прямой ответ без поиска
-- `"расскажи про кафедру ИВТ"` → один поиск → ответ
-- `"что нужно для поступления на IT и есть ли общежитие?"` → два поиска → ответ
+- `"когда основан университет?"` → `respond_directly` без поиска
+- `"расскажи про кафедру ИВТ"` → один поиск → `respond_directly`
+- `"что нужно для поступления на IT и есть ли общежитие?"` → два поиска → `respond_directly`
 
-Защита от галлюцинаций: список маркеров (`"перезвоню"`, `"уточню"`, `"проверю"` и т.д.) — если LLM пытается дать такой ответ вместо поиска, форсируется поиск.
+Если лимит поисков исчерпан — форсируется `respond_directly` через явный `tool_choice`.
 
 **Фразы ожидания при поиске** — рандомизированы (два пула: для первого и повторного поиска):
 ```
 "Минуточку, ищу информацию."  /  "Сейчас посмотрю."  /  "Одну секунду, проверяю."  / ...
 ```
+
+**Логи производительности**
+
+`perf_store.py` — кольцевой буфер в памяти на 500 записей (thread-safe). После каждого запроса агент пишет в него тайминги: STT-латентность, время поиска (SBERT + CE), время ответа LLM, e2e. Данные доступны через API и отображаются в adminке с цветовой индикацией.
 
 **Эндпоинты:**
 | Метод | Путь | Описание |
@@ -104,6 +112,10 @@ LLM-агент получает два инструмента:
 | `POST` | `/ai_service/voice` | Голос: файл + history + user_name → `{user_msg, response}` |
 | `POST` | `/ai_service/voice/stream` | То же, но NDJSON-стрим предложений |
 | `POST` | `/ai_service/transcribe` | Только STT, без RAG |
+| `POST` | `/ai_service/embed` | SBERT-эмбеддинги `{texts[]}` → `{embeddings[]}` (для admin_service) |
+| `GET` | `/ai_service/perf-logs` | Записи производительности (до 500) |
+| `POST` | `/eval_full` | Агентский ответ + метрики ретривала (для evaluation) |
+| `POST` | `/eval_query` | RAG-поиск без агента (для evaluation) |
 | `POST` | `/reload-db` | Перезагрузить ChromaDB в памяти (вызывается после индексации) |
 
 **ChromaDB** — `PersistentClient`, коллекция `chroma`. Общая bind-mount директория с `admin_service` (`./ai_service/chroma_db`). После индексации `admin_service` дёргает `/reload-db` — `ai_service` пересоздаёт клиент и начинает видеть новые чанки без перезапуска.
@@ -150,6 +162,18 @@ Set(CALL_UUID=${H:0:8}-${H:8:4}-${H:12:4}-${H:16:4}-${H:20:12})
   - Email → вслух: `user@mail.ru` → `user собака mail точка ru`
   - Числа → слова (через `num2words`)
 - 60мс тишины в начале каждого фрагмента (lead-in) — Asterisk обрезает первые байты без него
+
+**Перевод на оператора:**
+
+После каждой реплики пользователя делается предварительная транскрипция (до отправки в ai_service). Если текст содержит запрос живого человека или мат — бот произносит фразу о переключении и закрывает соединение, Asterisk продолжает диалплан.
+
+Детекция:
+- **Запрос оператора** — regex по словам: `оператор*`, `живого человека`, `позовите человека`, `хочу/нужен оператора`, `переключи на человека` и т.д.
+- **Мат** — список ключевых слов, любое вхождение триггерит перевод
+
+Фраза перевода произносится из пула `_TRANSFER_PHRASES` и логируется в историю диалога.
+
+> **Мок**: сейчас после фразы просто закрывается AudioSocket — Asterisk продолжает диалплан (туда нужно добавить `Dial`/`Queue` на экстеншн оператора). Когда будет реальный экстеншн — в `_transfer_to_operator()` добавится AMI `Redirect` перед закрытием.
 
 **Barge-in (перебивание ассистента):**
 - Пока ассистент воспроизводит аудио, VAD параллельно слушает входящий поток
@@ -212,6 +236,24 @@ Docker-образ `mlan/asterisk`. SIP-сервер для приёма звон
 - Лог всех запусков индексации (статусы: ожидание / выполняется / готово / ошибка)
 - Автообновление раз в 3с пока есть активные задачи
 
+**Вкладка «Диалоги»:**
+- Журнал всех завершённых диалогов из телефонии и браузера
+- Фильтры по источнику (`phone` / `web`) и статусу (`ok` / `disputed`)
+- Пагинация, просмотр полного транскрипта
+- Смена статуса вручную, удаление диалога
+- **Автоматическая пометка «спорных»**: если в ответах бота есть фразы типа `"не смогла найти"`, `"нет информации"` — диалог помечается `disputed` автоматически при сохранении
+
+**Вкладка «Производительность»:**
+- Таблица последних 500 запросов с тайминговой разбивкой: STT / поиск / LLM / e2e
+- Цветовая индикация по порогам (зелёный / жёлтый / красный)
+- Раскрываемые детали по каждому запросу
+
+**Вкладка «Система»:**
+- **История звонков** — показывает количество JSON-файлов сессий телефонии (том `telephony_sessions`). Кнопка «Очистить историю звонков» сбрасывает имена и историю всех абонентов
+- **История голосового чата** — информационная карточка: браузерная история хранится в памяти страницы, сервер не при чём
+- **Переиндексация всех файлов** — кнопка «↺ Переиндексировать все файлы»: пересчитывает эмбеддинги для всех файлов в S3. Используется после смены SBERT-модели или перехода на GPU
+- **База знаний (ChromaDB)** — кнопка «⟳ Перезагрузить ChromaDB»: принудительно перезагружает коллекцию в ai_service после ручных правок чанков
+
 **Вкладка «Справка»:**
 - Схема работы системы, FAQ, объяснение что такое чанки и как работает индексация
 
@@ -221,8 +263,11 @@ Docker-образ `mlan/asterisk`. SIP-сервер для приёма звон
 3. YAML → парсить напрямую без LLM. Всё остальное → LLM-чанкер
 4. LLM-чанкер: разбить текст на части ≤9000 символов по абзацам, для каждой части вызвать LLM с промптом `"разбей на смысловые чанки, верни JSON"`
 5. Удалить старые чанки файла из ChromaDB (по `source_file_id`)
-6. Записать новые чанки батчами по 50
-7. Вызвать `POST /reload-db` на ai_service — горячая перезагрузка ChromaDB без рестарта
+6. Для каждого чанка получить эмбеддинг через `POST /ai_service/embed` (тот же GPU что и при поиске)
+7. Записать новые чанки батчами по 50
+8. Вызвать `POST /reload-db` на ai_service — горячая перезагрузка ChromaDB без рестарта
+
+> **Почему эмбеддинги через ai_service?** Ранее admin_service держал локальную копию SBERT и мог считать эмбеддинги на CPU, а ai_service искал по ним на GPU — координаты в пространстве расходились. Теперь обе операции идут на одном устройстве.
 
 **S3-слой** (`s3_manager.py`):
 - Ключ объекта: `files/{uuid4}/{url-encoded-filename}`
@@ -247,6 +292,16 @@ Docker-образ `mlan/asterisk`. SIP-сервер для приёма звон
 | `PUT` | `/admin/chunks/{id}` | Обновить чанк |
 | `DELETE` | `/admin/chunks/{id}` | Удалить чанк |
 | `GET` | `/admin/tasks` | Журнал задач индексации |
+| `POST` | `/admin/files/reindex-all` | Переиндексировать все файлы одной кнопкой |
+| `GET` | `/admin/dialogs` | Список диалогов (фильтры, пагинация) |
+| `GET` | `/admin/dialogs/{id}` | Один диалог с транскриптом |
+| `PATCH` | `/admin/dialogs/{id}/status` | Сменить статус (`ok` / `disputed`) |
+| `DELETE` | `/admin/dialogs/{id}` | Удалить диалог |
+| `GET` | `/admin/perf-logs` | Прокси к `/ai_service/perf-logs` |
+| `POST` | `/admin/ai/reload-db` | Прокси к `/reload-db` на ai_service (перезагрузить ChromaDB) |
+| `GET` | `/admin/sessions/stats` | Количество активных JSON-сессий телефонии |
+| `DELETE` | `/admin/sessions/all` | Удалить все сессии телефонии (сбросить историю звонков) |
+| `GET` | `/internal/dialogs` | Список диалогов без авторизации (для telephony/voice_service) |
 
 ---
 
@@ -308,11 +363,16 @@ ai_whisper_cache:     кэш модели Whisper
 voice_torch_cache:    кэш PyTorch (Silero TTS для voice_service)
 telephony_torch_cache: кэш PyTorch (Silero VAD/TTS для телефонии)
 telephony_sessions:   JSON-файлы сессий по звонкам
+dialog_logs:          SQLite-база диалогов (общая для admin_service и telephony_service)
 
 # Bind mounts (данные на хосте)
 ./ai_service/chroma_db  → ai_service + admin_service (общая ChromaDB)
 ./ai_service/models     → ai_service + admin_service (модели SBERT/Cross-Encoder, только чтение)
 ./config                → asterisk (конфиги pjsip/extensions/rtp)
+
+# GPU (опционально)
+# ai_service имеет NVIDIA GPU passthrough в docker-compose.
+# Если GPU недоступна — контейнер стартует в CPU-режиме автоматически.
 ```
 
 **Порядок запуска** (через healthcheck `depends_on`):
@@ -487,10 +547,11 @@ python db_loader.py  # читает data/*.yaml
 helper_services/
 ├── ai_service/                   # RAG + LLM + STT
 │   ├── app/
-│   │   ├── api/endpoints/        # POST /chat, /voice, /voice/stream, /transcribe
+│   │   ├── api/endpoints/        # /chat, /voice, /voice/stream, /transcribe, /embed, eval
 │   │   ├── services/
-│   │   │   ├── embeddings_service/  # SBERT, Cross-Encoder, ChromaDB, search_pipeline
-│   │   │   └── llm_service/         # Agentic RAG loop, инструменты, STT
+│   │   │   ├── embeddings_service/  # SBERT, Cross-Encoder, ChromaDB, search_pipeline (CUDA)
+│   │   │   ├── llm_service/         # Agentic RAG loop, respond_directly, tool_choice=required
+│   │   │   └── perf_store.py        # Кольцевой буфер 500 записей латентности
 │   │   └── config.py
 │   ├── models/                   # Веса SBERT + Cross-Encoder (bind mount)
 │   ├── chroma_db/                # Векторная БД (bind mount, общая с admin_service)
@@ -516,14 +577,16 @@ helper_services/
 │       │   ├── auth.py           # JWT login/logout
 │       │   ├── files.py          # CRUD файлов S3
 │       │   ├── chunks.py         # CRUD чанков ChromaDB
-│       │   └── indexing.py       # Запуск индексации
+│       │   ├── indexing.py       # Запуск индексации
+│       │   └── dialogs.py        # CRUD диалогов + прокси perf-logs
 │       ├── services/
 │       │   ├── s3_manager.py     # S3-слой (aiobotocore)
 │       │   ├── llm_chunker.py    # LLM-разбивка файлов на чанки
 │       │   ├── indexer.py        # Полный пайплайн индексации
-│       │   ├── embedder.py       # SBERT для admin_service
+│       │   ├── embedder.py       # Прокси к /ai_service/embed
 │       │   ├── chroma_client.py  # ChromaDB клиент
-│       │   └── task_store.py     # In-memory журнал задач
+│       │   ├── task_store.py     # In-memory журнал задач
+│       │   └── dialog_store.py   # SQLite-хранилище диалогов
 │       └── static/index.html     # Vue 3 SPA (CDN, no build)
 │
 ├── config/                       # Конфиги Asterisk
@@ -538,7 +601,41 @@ helper_services/
 │
 ├── garage.toml                   # Конфиг Garage S3
 └── docker-compose.yml
+
+eval/                             # RAG evaluation pipeline (вне Docker)
+├── evaluate.py                   # Скрипт оценки (50 вопросов, 9 метрик)
+├── reference_answers.yaml        # Ground truth: эталонные чанки для вопросов
+├── requirements.txt              # зависимости evaluation скрипта
+└── results/                      # JSON-файлы с результатами прогонов
 ```
+
+---
+
+## RAG Evaluation Pipeline
+
+Инструмент для измерения качества поиска и ответов. Запускается вне Docker, стучится в `ai_service`.
+
+```bash
+cd eval
+pip install -r requirements.txt
+python evaluate.py --host http://localhost:8005
+```
+
+**Метрики:**
+
+| Метрика | Что измеряет |
+|---|---|
+| Context Relevance | Средний Cross-Encoder score топ-1 чанка — насколько найденный контекст релевантен вопросу |
+| Answer Relevance | `cosine_sim(SBERT(вопрос), SBERT(ответ))` — насколько ответ отвечает на вопрос |
+| Out-of-Scope Rate | % корректных отказов для вопросов вне базы (ответ не должен выдумывать) |
+| Latency | Retrieval / rerank / e2e в миллисекундах |
+| Hit Rate@1, @5 | Доля вопросов где эталонный чанк попал в топ-1 / топ-5 после CE-ранжирования |
+| MRR@5 | Mean Reciprocal Rank — насколько высоко в списке стоит нужный чанк |
+| NDCG@5 | Нормализованный дисконтированный кумулятивный выигрыш |
+| ROUGE-L | Если заполнен `reference_answers.yaml` с эталонными ответами |
+| BERTScore F1 | Если заполнен `reference_answers.yaml` |
+
+`reference_answers.yaml` — ground truth файл: для каждого вопроса указан эталонный чанк (`top_chunk`). Поставляется pre-populated для 50 вопросов из `Тесты.txt`.
 
 ---
 
@@ -556,3 +653,11 @@ helper_services/
 | Garage не стартует | Неинициализированный кластер | Выполнить `garage layout assign` и создать bucket |
 | Индексация зависла | LLM не отвечает / timeout | Смотреть логи `admin_service`, проверить LLM_API_KEY |
 | История диалога сбрасывается (телефон) | Том `telephony_sessions` не смонтирован | Проверить volumes в docker-compose |
+| Диалоги не сохраняются | Том `dialog_logs` не смонтирован | Проверить volumes в docker-compose, путь `/app/dialog_logs` |
+| admin_service падает при индексации с ошибкой embed | `ai_service` недоступен | `POST /ai_service/embed` должен отвечать — проверить healthcheck |
+| GPU не используется несмотря на видеокарту | NVIDIA-драйвер не пробрасывается в Docker | Установить `nvidia-container-toolkit`, добавить `deploy.resources` в docker-compose |
+| Whisper падает с ошибкой float16 | Pascal GTX 10xx не поддерживает float16 | Устанавливается int8 автоматически при обнаружении Pascal-архитектуры |
+| LLM выдаёт текст вместо вызова инструмента | Модель игнорирует `tool_choice=required` | Не все модели поддерживают `required` — использовать DeepSeek или GPT-4 |
+| Evaluation: Hit Rate@1 близок к 0 | SBERT-модель не совпадает с той что в reference_answers | Запустить `reindex-all`, затем пересобрать reference_answers |
+| Перевод на оператора не срабатывает | Фраза не попала в паттерн | Проверить `_TRANSFER_RE` и `_PROFANITY` в `telephony_service/app/main.py` |
+| После фразы перевода звонок не идёт к оператору | Диалплан не настроен | Добавить `Dial`/`Queue` в `extensions.conf` после шага `AudioSocket` |

@@ -37,7 +37,6 @@ services:
     volumes:
       - ./ai_service/chroma_db:/app/chroma_db
       - ./ai_service/models:/app/models:ro
-      - telephony_sessions:/app/telephony_sessions
       - dialog_logs:/app/dialog_logs
     depends_on:
       garage:
@@ -77,7 +76,7 @@ services:
       - "9093:9093"                  # AudioSocket — Asterisk (хост) → сюда
     volumes:
       - telephony_torch_cache:/app/.torch_cache
-      - telephony_sessions:/app/sessions
+      - dialog_logs:/app/dialog_logs
     environment:
       - AI_SERVICE_URL=http://ai_service:8005
       - ADMIN_SERVICE_URL=http://admin_service:8020
@@ -145,7 +144,6 @@ networks:
 volumes:
   voice_torch_cache:
   telephony_torch_cache:
-  telephony_sessions:
   ai_whisper_cache:
   garage_data:
   dialog_logs:

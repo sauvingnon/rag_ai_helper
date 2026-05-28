@@ -213,6 +213,10 @@ async def ai_agent_stream(
 
     search_count = 0
 
+    # Отдаём фразу ожидания сразу — до первого LLM-вызова.
+    # Иначе пользователь слышит 5-8 секунд тишины пока LLM думает что делать.
+    yield random.choice(_SEARCH_PHRASES_1)
+
     try:
         while True:
             t_llm0 = time.monotonic()
@@ -297,7 +301,8 @@ async def ai_agent_stream(
 
                 search_count += 1
                 logger.info("[search] #%d запрос: «%s»", search_count, query[:60])
-                yield random.choice(_SEARCH_PHRASES_1 if search_count == 1 else _SEARCH_PHRASES_2)
+                if search_count > 1:
+                    yield random.choice(_SEARCH_PHRASES_2)
 
                 t_s = time.monotonic()
                 result, timing = await loop.run_in_executor(None, _execute_search, query)

@@ -4,3 +4,4 @@ httpx>=0.27.0
 soundfile>=0.12.0
 numpy>=1.24.0
 omegaconf>=2.3.0
+num2words>=0.5.13

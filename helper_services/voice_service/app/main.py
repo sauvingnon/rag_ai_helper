@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -9,11 +10,23 @@ from pathlib import Path
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from num2words import num2words
 from pydantic import BaseModel
 
 from app.services.tts import load_model, synthesize
+
+
+def _normalize_for_tts(text: str) -> str:
+    """Конвертирует цифры в русские слова чтобы Silero не пропускал их."""
+    def _replace(m: re.Match) -> str:
+        try:
+            num_str = re.sub(r"[\s ]", "", m.group())
+            return num2words(int(num_str), lang="ru")
+        except Exception:
+            return m.group()
+    return re.sub(r"\b\d{1,3}(?:[\s ]\d{3})+\b|\b\d+\b", _replace, text)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -76,6 +89,21 @@ async def chat_endpoint(req: ChatRequest):
     return {"response": text if isinstance(text, str) else str(text)}
 
 
+@app.post("/chat/stream")
+async def chat_stream_endpoint(req: ChatRequest):
+    async def proxy():
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream(
+                "POST",
+                f"{AI_SERVICE_URL}/ai_service/chat/stream",
+                json={"message": req.message, "history": req.history},
+            ) as resp:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+
+    return StreamingResponse(proxy(), media_type="application/x-ndjson")
+
+
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -130,7 +158,7 @@ async def ws_endpoint(websocket: WebSocket):
                 }))
 
                 if answer:
-                    wav = synthesize(answer)
+                    wav = synthesize(_normalize_for_tts(answer))
                     await websocket.send_bytes(wav)
 
             except httpx.HTTPError as e:

@@ -6,8 +6,6 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-_TELEPHONY_SESSIONS_DIR = Path("/app/telephony_sessions")
-
 import httpx
 from app.config import S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET, AI_SERVICE_URL
 from app.logger import logger
@@ -17,7 +15,7 @@ from app.api.chunks import router as chunks_router
 from app.api.indexing import router as indexing_router, set_s3 as indexing_set_s3
 from app.api.auth import router as auth_router, verify_token, COOKIE_NAME
 from app.api.dialogs import internal_router as dialogs_internal_router, admin_router as dialogs_admin_router
-from app.services.dialog_store import init_db
+from app.services.dialog_store import init_db, count_sessions, clear_sessions
 from app.logger import logger
 
 s3 = S3Manager(
@@ -90,23 +88,16 @@ async def reload_ai_db():
 
 @app.get("/admin/sessions/stats")
 async def sessions_stats():
-    """Количество файлов сессий телефонии."""
-    if not _TELEPHONY_SESSIONS_DIR.exists():
-        return {"count": 0}
-    files = list(_TELEPHONY_SESSIONS_DIR.glob("*.json"))
-    return {"count": len(files)}
+    """Количество активных сессий телефонии."""
+    return {"count": count_sessions()}
 
 
 @app.delete("/admin/sessions/all", status_code=200)
 async def clear_all_sessions():
-    """Удалить все файлы сессий телефонии (история диалогов)."""
-    if not _TELEPHONY_SESSIONS_DIR.exists():
-        return {"deleted": 0}
-    files = list(_TELEPHONY_SESSIONS_DIR.glob("*.json"))
-    for f in files:
-        f.unlink(missing_ok=True)
-    logger.info("Удалено сессий телефонии: %d", len(files))
-    return {"deleted": len(files)}
+    """Удалить все сессии телефонии (история диалогов по номерам)."""
+    deleted = clear_sessions()
+    logger.info("Удалено сессий телефонии: %d", deleted)
+    return {"deleted": deleted}
 
 
 STATIC_DIR = Path(__file__).parent / "static"

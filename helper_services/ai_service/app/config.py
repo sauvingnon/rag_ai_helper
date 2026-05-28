@@ -17,3 +17,4 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-placeholder")
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 RERANK_THRESHOLD = float(os.getenv("RERANK_THRESHOLD", "-2.0"))
+USE_CROSS_ENCODER = os.getenv("USE_CROSS_ENCODER", "true").lower() not in ("false", "0", "no")

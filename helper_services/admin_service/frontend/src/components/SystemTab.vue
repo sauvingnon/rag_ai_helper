@@ -10,12 +10,12 @@
         <div>
           <div class="section-title">История звонков (телефония)</div>
           <div class="section-desc">
-            JSON-файлы с историей диалогов по каждому номеру телефона.
-            Хранятся в volume <code>telephony_sessions</code>.
+            История диалогов по каждому номеру телефона.
+            Хранятся в таблице <code>sessions</code> базы данных <code>dialogs.db</code> (volume <code>dialog_logs</code>).
           </div>
         </div>
         <div class="section-meta dim">
-          Файлов: <strong>{{ sessionCount ?? '…' }}</strong>
+          Записей: <strong>{{ sessionCount ?? '…' }}</strong>
         </div>
       </div>
       <div class="section-body">

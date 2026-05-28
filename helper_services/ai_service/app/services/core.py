@@ -52,15 +52,20 @@ async def general_handler(request: AIRequest) -> str:
         return "Извини, произошла ошибка."
 
 
-async def voice_handler_stream(file: UploadFile, history: list = None, user_name: str = ""):
+async def voice_handler_stream(file: UploadFile, history: list = None, user_name: str = "", user_text: str = ""):
     """Async-генератор: (user_msg, sentence). Предложения отдаются по мере генерации LLM."""
-    audio_bytes = await file.read()
-    bio = io.BytesIO(audio_bytes)
-    bio.name = "voice.wav"
+    if user_text:
+        user_msg = user_text
+        stt_sec = 0.0
+    else:
+        audio_bytes = await file.read()
+        bio = io.BytesIO(audio_bytes)
+        bio.name = "voice.wav"
 
-    t_stt0 = __import__("time").monotonic()
-    user_msg = await ai_voice_reqest(file=bio)
-    stt_sec = __import__("time").monotonic() - t_stt0
+        t_stt0 = __import__("time").monotonic()
+        user_msg = await ai_voice_reqest(file=bio)
+        stt_sec = __import__("time").monotonic() - t_stt0
+
     if not user_msg or not user_msg.strip():
         return
 
